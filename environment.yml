@@ -1,0 +1,16 @@
+name: qmdock
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - libblas=*=*openblas
+  - numpy
+  - scipy
+  - pandas
+  - rdkit
+  - pytest
+  - pip
+  - pip:
+      - tblite
+      - dimorphite-dl
+      - torch
