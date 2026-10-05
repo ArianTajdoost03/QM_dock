@@ -238,6 +238,7 @@ def dock_one(cfg, mol):
             raise RuntimeError(f"no conformer converged in GFN2: {errors[:3]}; run diagnose.py")
         e_ref = min(conf_e.values())
         log(f"ligand reference energy {e_ref:.6f} Ha ({len(conf_e)}/{n_conf} conformers converged)")
+        n_conf_built = n_conf
         timings["prerelax"] = time.time() - t
 
         t = time.time()
@@ -262,6 +263,11 @@ def dock_one(cfg, mol):
             d = ps.diag
             log(f"    random poses clash-free: {100 * d['random_clash_free']:.1f}%, after optimisation: "
                 f"{d['optimized_clash_free']}/{d['optimized']}")
+            if d.get("mutation"):
+                m = d["mutation"]
+                fmt = lambda v: "n/a" if v is None else f"{v:.3f}"
+                log(f"    mutation: {m['rounds']} round(s), {m['children']} children, "
+                    f"best fast score {fmt(m['best_before'])} -> {fmt(m['best_after'])}")
             if len(ps) == 0:
                 worst = np.argsort(-d["partners"])[:8]
                 log("    receptor atoms blocking most poses: " + ", ".join(

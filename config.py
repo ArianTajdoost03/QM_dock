@@ -54,6 +54,14 @@ class Config:
     dry_run: bool = False
     reuse_fast: bool = False
     export_dft: int = 0
+    mutation_rounds: int = 0
+    mutation_parents: int = 100
+    mutation_children: int = 10
+    mutation_steps: int = 40
+    mutation_rotation: float = 0.35
+    mutation_shift: float = 0.6
+    mutation_swap: float = 0.3
+    mutation_dedupe: float = 0.3
     workers: int = 0
     device: str = "auto"
     seed: int = 7

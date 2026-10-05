@@ -129,6 +129,44 @@ def free_points(scorer, center, radius, spacing=0.5, clearance=2.6):
     return pts[d >= clearance]
 
 
+def polish(scorer, C, conf, R0, t0, ctr, cfg, gen, steps):
+    outR, outT = [], []
+    device = scorer.device
+    step = scorer.chunk(True, False)
+    for s in range(0, len(conf), step):
+        sl = slice(s, s + step)
+        idx, R0b, t0b = conf[sl], R0[sl], t0[sl]
+        w = 1e-3 * torch.randn(len(idx), 3, generator=gen, device=device)
+        dt = torch.zeros(len(idx), 3, device=device)
+        mw, vw, mt, vt = (torch.zeros_like(w), torch.zeros_like(w), torch.zeros_like(dt), torch.zeros_like(dt))
+        decay = 0.5 ** (1 / max(1, steps // 4))
+        for k in range(1, steps + 1):
+            w.requires_grad_(True)
+            dt.requires_grad_(True)
+            X = place(C, idx, rodrigues(w) @ R0b, t0b + dt)
+            sc, _ = scorer.evaluate(X, full=False)
+            excess = torch.relu((X.mean(1) - ctr).norm(dim=1) - cfg.search_radius)
+            gw, gt = torch.autograd.grad((sc + 10.0 * excess ** 2).sum(), [w, dt])
+            w, dt = w.detach(), dt.detach()
+            adam_step(w, gw, mw, vw, k, 0.05 * decay ** k)
+            adam_step(dt, gt, mt, vt, k, 0.2 * decay ** k)
+        with torch.no_grad():
+            outR.append(rodrigues(w) @ R0b)
+            outT.append(t0b + dt)
+    return torch.cat(outR), torch.cat(outT)
+
+
+def score_population(scorer, C, conf, R, t):
+    scores, clashes = [], []
+    step = scorer.chunk(False, True)
+    with torch.no_grad():
+        for s in range(0, len(conf), step):
+            X = place(C, conf[s:s + step], R[s:s + step], t[s:s + step])
+            scores.append(scorer.evaluate(X, full=False)[0].cpu().numpy())
+            clashes.append(scorer.evaluate(X, full=True)[1].cpu().numpy())
+    return np.concatenate(scores), np.concatenate(clashes)
+
+
 def search(scorer, conf_coords, heavy, center, cfg, seed, site):
     device = scorer.device
     gen = torch.Generator(device=device).manual_seed(seed)
@@ -164,51 +202,51 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site):
             ts[s:s + b] = t.cpu().numpy()
     top = np.argsort(scores)[:cfg.n_optimize]
     conf_t = torch.as_tensor(conf[top], device=device)
-    R0 = torch.as_tensor(Rs[top], device=device)
-    t0 = torch.as_tensor(ts[top], device=device)
-    final_R, final_t = [], []
-    step = scorer.chunk(True, False)
-    for s in range(0, len(top), step):
-        sl = slice(s, s + step)
-        idx, R0b, t0b = conf_t[sl], R0[sl], t0[sl]
-        w = 1e-3 * torch.randn(len(idx), 3, generator=gen, device=device)
-        dt = torch.zeros(len(idx), 3, device=device)
-        mw, vw, mt, vt = (torch.zeros_like(w), torch.zeros_like(w), torch.zeros_like(dt), torch.zeros_like(dt))
-        decay = 0.5 ** (1 / max(1, cfg.opt_steps // 4))
-        for k in range(1, cfg.opt_steps + 1):
-            w.requires_grad_(True)
-            dt.requires_grad_(True)
-            X = place(C, idx, rodrigues(w) @ R0b, t0b + dt)
-            sc, _ = scorer.evaluate(X, full=False)
-            excess = torch.relu((X.mean(1) - ctr).norm(dim=1) - cfg.search_radius)
-            gw, gt = torch.autograd.grad((sc + 10.0 * excess ** 2).sum(), [w, dt])
-            w, dt = w.detach(), dt.detach()
-            adam_step(w, gw, mw, vw, k, 0.05 * decay ** k)
-            adam_step(dt, gt, mt, vt, k, 0.2 * decay ** k)
-        with torch.no_grad():
-            final_R.append(rodrigues(w) @ R0b)
-            final_t.append(t0b + dt)
+    Rf, tf = polish(scorer, C, conf_t, torch.as_tensor(Rs[top], device=device),
+                    torch.as_tensor(ts[top], device=device), ctr, cfg, gen, cfg.opt_steps)
+    sc, clash = score_population(scorer, C, conf_t, Rf, tf)
+    mutation = None
+    if cfg.mutation_rounds > 0:
+        best_before = float(sc[~clash].min()) if (~clash).any() else None
+        children = 0
+        for _ in range(cfg.mutation_rounds):
+            ok_idx = np.where(~clash)[0]
+            if len(ok_idx) == 0:
+                break
+            parents = ok_idx[np.argsort(sc[ok_idx])][:cfg.mutation_parents]
+            p = torch.as_tensor(np.repeat(parents, cfg.mutation_children), device=device)
+            nb = len(p)
+            R_new = rodrigues(cfg.mutation_rotation * torch.randn(nb, 3, generator=gen, device=device)) @ Rf[p]
+            t_new = tf[p] + cfg.mutation_shift * torch.randn(nb, 3, generator=gen, device=device)
+            swap = torch.rand(nb, generator=gen, device=device) < cfg.mutation_swap
+            c_new = torch.where(swap, torch.randint(len(C), (nb,), generator=gen, device=device), conf_t[p])
+            Rc, tc = polish(scorer, C, c_new, R_new, t_new, ctr, cfg, gen, cfg.mutation_steps)
+            sc_c, cl_c = score_population(scorer, C, c_new, Rc, tc)
+            conf_t, Rf, tf = torch.cat([conf_t, c_new]), torch.cat([Rf, Rc]), torch.cat([tf, tc])
+            sc, clash = np.concatenate([sc, sc_c]), np.concatenate([clash, cl_c])
+            children += nb
+        best_after = float(sc[~clash].min()) if (~clash).any() else None
+        mutation = {"rounds": cfg.mutation_rounds, "children": children, "best_before": best_before,
+                    "best_after": best_after}
+    Xf = []
+    partners = torch.zeros(scorer.n_env, device=device)
+    step = scorer.chunk(False, True)
     with torch.no_grad():
-        Rf, tf = torch.cat(final_R), torch.cat(final_t)
-        Xf, sf, cf = [], [], []
-        partners = torch.zeros(scorer.n_env, device=device)
-        step = scorer.chunk(False, True)
-        for s in range(0, len(top), step):
+        for s in range(0, len(conf_t), step):
             X = place(C, conf_t[s:s + step], Rf[s:s + step], tf[s:s + step])
-            sc, _ = scorer.evaluate(X, full=False)
-            _, clash = scorer.evaluate(X, full=True)
-            partners += scorer.clash_partners(X[clash]).float() if bool(clash.any()) else 0
+            bad = torch.as_tensor(clash[s:s + step], device=device)
+            partners += scorer.clash_partners(X[bad]).float() if bool(bad.any()) else 0
             Xf.append(X.cpu().numpy())
-            sf.append(sc.cpu().numpy())
-            cf.append(clash.cpu().numpy())
-    X, sc, clash = np.concatenate(Xf), np.concatenate(sf), np.concatenate(cf)
+    X, conf_pop = np.concatenate(Xf), conf_t.cpu().numpy()
     ok = np.where(~clash)[0]
     order = ok[np.argsort(sc[ok])]
+    if cfg.mutation_rounds > 0 and len(order):
+        order = np.array(diverse(X[:, heavy, :], order, cfg.mutation_dedupe, len(order)), dtype=int)
     if cfg.selection == "cluster":
         keep = [int(i) for i in order[:cfg.cluster_pool]]
     else:
         keep = diverse(X[:, heavy, :], order, cfg.diversity_rmsd, cfg.n_qm * 3)
-    diag = {"random_clash_free": free / n, "optimized": len(top), "optimized_clash_free": int(len(ok)),
-            "partners": partners.cpu().numpy()}
-    return PoseSet(X[keep].astype(float), conf[top][keep], sc[keep].astype(float),
+    diag = {"random_clash_free": free / n, "optimized": len(top), "optimized_clash_free": int((~clash[:len(top)]).sum()),
+            "partners": partners.cpu().numpy(), "mutation": mutation}
+    return PoseSet(X[keep].astype(float), conf_pop[keep], sc[keep].astype(float),
                    np.full(len(keep), site, dtype=int), diag)

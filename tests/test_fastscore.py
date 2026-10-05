@@ -40,3 +40,17 @@ def test_diverse_filters_close_poses():
     a[1] += 0.1
     a[2] += 5.0
     assert diverse(a, [0, 1, 2], 1.0, 10) == [0, 2]
+
+
+def test_mutation_never_worsens_best_score():
+    base = dict(n_random=2000, n_optimize=100, opt_steps=30, n_qm=5, search_radius=4.0)
+    conf = np.array([[[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [2.4, 0.9, 0.0]]])
+    heavy = np.array([True, True, True])
+    plain = Config("r", "l", **base)
+    mutated = Config("r", "l", mutation_rounds=2, mutation_parents=10, mutation_children=4, mutation_steps=15, **base)
+    a = search(make_scorer(plain), conf, heavy, np.array([0.0, 0.0, 4.0]), plain, 1, 0)
+    b = search(make_scorer(mutated), conf, heavy, np.array([0.0, 0.0, 4.0]), mutated, 1, 0)
+    assert b.diag["mutation"]["children"] == 80
+    assert b.score.min() <= a.score.min() + 1e-6
+    _, clash = make_scorer(mutated).evaluate(torch.tensor(b.coords, dtype=torch.float32))
+    assert not clash.any()
