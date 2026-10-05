@@ -1,0 +1,8 @@
+ADvina
+RMSD = 4.700
+time = less than a minute
+qmdock
+RMSD = 2.135 Å
+time = 300 s (5 min)
+
+# --workers 12 --solvent water --final-top 0 --cluster-expand 0 --n-conformer 300 --n-random 200000
