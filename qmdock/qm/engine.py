@@ -13,7 +13,7 @@ import numpy as np
 from scipy.optimize import minimize
 from tblite.interface import Calculator
 
-from config import BOHR_TO_ANG, HARTREE_TO_KCAL
+from qmdock.config import BOHR_TO_ANG, HARTREE_TO_KCAL
 
 LADDER = (
     {"max-iter": 250},

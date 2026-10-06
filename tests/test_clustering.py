@@ -2,7 +2,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from clustering import auto_radius, cluster_poses, pairwise_rmsd, representatives, spread_members, sym_rmsd, symmetry_permutations
+from qmdock.search.clustering import auto_radius, cluster_poses, pairwise_rmsd, representatives, spread_members, sym_rmsd, symmetry_permutations
 
 
 def benzoic():

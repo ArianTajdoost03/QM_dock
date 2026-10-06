@@ -5,8 +5,8 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
-from metals import ATOMIC_NUMBER, BOND_TOLERANCE, COVALENT_RADII, LINK_BOND, METAL_CHARGE, METALS
-from pdb_io import read_pdb
+from qmdock.chem.elements import ATOMIC_NUMBER, BOND_TOLERANCE, COVALENT_RADII, LINK_BOND, METAL_CHARGE, METALS
+from qmdock.chem.pdb_io import read_pdb
 
 COORDINATION_CUTOFF = 2.8
 

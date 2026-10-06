@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from metals import ATOMIC_NUMBER, WATER_NAMES
+from qmdock.chem.elements import ATOMIC_NUMBER, WATER_NAMES
 
 
 @dataclass

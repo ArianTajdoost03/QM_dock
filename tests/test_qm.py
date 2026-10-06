@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("tblite")
-from qm import check_parity, relax, solve
+from qmdock.qm.engine import check_parity, relax, solve
 
 WATER2 = np.array([[0, 0, 0], [0.96, 0, 0], [-0.24, 0.93, 0],
                    [2.9, 0, 0], [3.3, 0.8, 0.3], [3.3, -0.8, -0.3]])

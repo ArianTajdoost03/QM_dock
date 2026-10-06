@@ -2,8 +2,10 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
-from config import Config
-from fastscore import Scorer, diverse, rodrigues, search
+from qmdock.config import Config
+from qmdock.search.poses import diverse
+from qmdock.search.sampling import rodrigues, search
+from qmdock.search.scoring import Scorer
 
 
 def make_scorer(cfg):

@@ -1,6 +1,6 @@
 import numpy as np
 
-from receptor import load_receptor
+from qmdock.chem.receptor import load_receptor
 
 
 def pdb_line(i, name, el, x, y, z):

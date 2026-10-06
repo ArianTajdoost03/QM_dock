@@ -2,7 +2,7 @@ import sys
 
 import numpy as np
 
-from funnel import Runner
+from qmdock.qm.pool import Runner
 
 Z = np.array([8, 1, 1, 8, 1, 1], dtype=np.int32)
 POS = np.array([[0, 0, 0], [0.96, 0, 0], [-0.24, 0.93, 0],
@@ -27,7 +27,7 @@ def test_pool_matches_serial():
 def test_entrypoint_does_not_import_torch():
     import subprocess
 
-    code = "import dock, sys; sys.exit('torch' in sys.modules)"
+    code = "import qmdock.cli, sys; sys.exit('torch' in sys.modules)"
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
 
 
@@ -36,7 +36,7 @@ def crash_fn(job):
 
     if job["key"][1] == 1:
         os._exit(1)
-    from qm import run_job
+    from qmdock.qm.engine import run_job
 
     return run_job(job)
 

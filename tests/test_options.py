@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 from rdkit import Chem
 
-import dft_tools
-from ligand import embed, ligand_states
+from qmdock.tools import dft_tools
+from qmdock.chem.protonation import embed, ligand_states
 
 pytest.importorskip("tblite")
-from qm import preflight, solve
+from qmdock.qm.engine import preflight, solve
 
 Z = np.array([8, 1, 1, 8, 1, 1])
 P = np.array([[0, 0, 0], [0.96, 0, 0], [-0.24, 0.93, 0], [2.9, 0, 0], [3.3, 0.8, 0.3], [3.3, -0.8, -0.3]])
