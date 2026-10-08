@@ -74,6 +74,16 @@ class Session:
             rows[p] = row
         return rows
 
+    def fill_ligand_energies(self, lig, pids, coords, lig_e):
+        need = [p for p in pids if p not in lig_e]
+        jobs = [energy_job(("lig", p), lig.numbers, coords[p], lig.charge, self.cfg) for p in need]
+        for key, r in self.runner.map(jobs, "ligand energies of torsion-modified poses").items():
+            if r["ok"]:
+                lig_e[key[1]] = r["energy"]
+
+    def valid(self, sel, lig, p):
+        return p not in sel.rejected and (sel.flex or int(sel.poses.conf[p]) in lig.conf_e)
+
     def expand_clusters(self, lig, sel, stage1, coords, lig_e):
         cfg = self.cfg
         groups = sel.groups
@@ -92,7 +102,10 @@ class Session:
             for i in sorted(expanded):
                 done = [m for m in groups[i]["members"] if m in stage1]
                 extra += spread_members(sel.dist, done, groups[i]["members"], cfg.expand_members)
-            extra = [p for p in extra if p in lig_e]
+            extra = [p for p in extra if self.valid(sel, lig, p)]
+            if sel.flex:
+                self.fill_ligand_energies(lig, extra, coords, lig_e)
+                extra = [p for p in extra if p in lig_e]
             log(f"expanding {len(expanded)} best cluster(s) with {len(extra)} more poses")
             if extra:
                 stage1.update(self.evaluate(lig, extra, coords, lig_e, cfg.max_cluster_atoms))
@@ -105,8 +118,11 @@ class Session:
         poses = sel.poses
         P = len(poses)
         coords = {p: poses.coords[p] for p in range(P)}
-        lig_e = {p: lig.conf_e[int(poses.conf[p])] for p in range(P)
-                 if int(poses.conf[p]) in lig.conf_e and p not in sel.rejected}
+        lig_e = {}
+        if sel.flex:
+            self.fill_ligand_energies(lig, [p for p in sel.first if self.valid(sel, lig, p)], coords, lig_e)
+        else:
+            lig_e = {p: lig.conf_e[int(poses.conf[p])] for p in range(P) if self.valid(sel, lig, p)}
         stage1 = self.evaluate(lig, [p for p in sel.first if p in lig_e], coords, lig_e, cfg.max_cluster_atoms)
         cluster_of, expanded = {}, set()
         if sel.groups:

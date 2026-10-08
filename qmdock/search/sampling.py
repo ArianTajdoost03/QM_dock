@@ -37,8 +37,14 @@ def place(C, idx, R, t):
     return torch.einsum("bij,bnj->bni", R, C[idx]) + t[:, None, :]
 
 
-def polish(scorer, C, conf, R0, t0, ctr, cfg, gen, steps):
-    outR, outT = [], []
+def place_flex(C, idx, R, t, dl, tors):
+    if tors is None:
+        return place(C, idx, R, t)
+    return torch.einsum("bij,bnj->bni", R, tors.apply(C[idx], dl)) + t[:, None, :]
+
+
+def polish(scorer, C, conf, R0, t0, ctr, cfg, gen, steps, tors=None, dl0=None):
+    outR, outT, outD = [], [], []
     device = scorer.device
     step = scorer.chunk(True, False)
     for s in range(0, len(conf), step):
@@ -47,47 +53,68 @@ def polish(scorer, C, conf, R0, t0, ctr, cfg, gen, steps):
         w = 1e-3 * torch.randn(len(idx), 3, generator=gen, device=device)
         dt = torch.zeros(len(idx), 3, device=device)
         mw, vw, mt, vt = (torch.zeros_like(w), torch.zeros_like(w), torch.zeros_like(dt), torch.zeros_like(dt))
+        dl = dl0[sl].clone() if tors is not None else None
+        md, vd = (torch.zeros_like(dl), torch.zeros_like(dl)) if tors is not None else (None, None)
         decay = 0.5 ** (1 / max(1, steps // 4))
         for k in range(1, steps + 1):
             w.requires_grad_(True)
             dt.requires_grad_(True)
-            X = place(C, idx, rodrigues(w) @ R0b, t0b + dt)
+            if tors is not None:
+                dl.requires_grad_(True)
+            X = place_flex(C, idx, rodrigues(w) @ R0b, t0b + dt, dl, tors)
             sc, _ = scorer.evaluate(X, full=False)
             excess = torch.relu((X.mean(1) - ctr).norm(dim=1) - cfg.search_radius)
-            gw, gt = torch.autograd.grad((sc + 10.0 * excess ** 2).sum(), [w, dt])
+            loss = sc + 10.0 * excess ** 2
+            if tors is not None:
+                loss = loss + tors.intra(X)[0] + cfg.torsion_penalty * (1 - torch.cos(dl)).sum(1)
+                gw, gt, gd = torch.autograd.grad(loss.sum(), [w, dt, dl])
+                dl = dl.detach()
+                adam_step(dl, gd, md, vd, k, cfg.torsion_lr * decay ** k)
+            else:
+                gw, gt = torch.autograd.grad(loss.sum(), [w, dt])
             w, dt = w.detach(), dt.detach()
             adam_step(w, gw, mw, vw, k, 0.05 * decay ** k)
             adam_step(dt, gt, mt, vt, k, 0.2 * decay ** k)
         with torch.no_grad():
             outR.append(rodrigues(w) @ R0b)
             outT.append(t0b + dt)
-    return torch.cat(outR), torch.cat(outT)
+            if tors is not None:
+                outD.append(torch.atan2(torch.sin(dl), torch.cos(dl)))
+    return torch.cat(outR), torch.cat(outT), (torch.cat(outD) if tors is not None else None)
 
 
-def score_population(scorer, C, conf, R, t):
+def score_population(scorer, C, conf, R, t, tors=None, dl=None):
     scores, clashes = [], []
     step = scorer.chunk(False, True)
     with torch.no_grad():
         for s in range(0, len(conf), step):
-            X = place(C, conf[s:s + step], R[s:s + step], t[s:s + step])
-            scores.append(scorer.evaluate(X, full=False)[0].cpu().numpy())
-            clashes.append(scorer.evaluate(X, full=True)[1].cpu().numpy())
+            sl = slice(s, s + step)
+            X = place_flex(C, conf[sl], R[sl], t[sl], dl[sl] if tors is not None else None, tors)
+            sc = scorer.evaluate(X, full=False)[0]
+            clash = scorer.evaluate(X, full=True)[1]
+            if tors is not None:
+                e_in, hard = tors.intra(X)
+                sc, clash = sc + e_in, clash | hard
+            scores.append(sc.cpu().numpy())
+            clashes.append(clash.cpu().numpy())
     return np.concatenate(scores), np.concatenate(clashes)
 
 
-def search(scorer, conf_coords, heavy, center, cfg, seed, site):
+def search(scorer, conf_coords, heavy, center, cfg, seed, site, tors=None):
     device = scorer.device
     gen = torch.Generator(device=device).manual_seed(seed)
     centered = conf_coords - conf_coords.mean(axis=1, keepdims=True)
     C = torch.as_tensor(centered, dtype=torch.float32, device=device)
     ctr = torch.as_tensor(center, dtype=torch.float32, device=device)
     n = cfg.n_random
+    K = tors.K if tors is not None else 0
     free = 0
     voids = free_points(scorer, ctr, cfg.search_radius)
     scores = np.empty(n, dtype=np.float32)
     conf = np.empty(n, dtype=np.int64)
     Rs = np.empty((n, 3, 3), dtype=np.float32)
     ts = np.empty((n, 3), dtype=np.float32)
+    dls = np.zeros((n, K), dtype=np.float32)
     step = scorer.chunk(False, False)
     with torch.no_grad():
         for s in range(0, n, step):
@@ -102,7 +129,13 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site):
                 pick = voids[torch.randint(len(voids), (b,), generator=gen, device=device)]
                 jitter = 0.25 * torch.randn(b, 3, generator=gen, device=device)
                 t = torch.where(torch.rand(b, 1, generator=gen, device=device) < 0.75, pick + jitter, t)
-            sc, cl = scorer.evaluate(place(C, idx, R, t), full=False)
+            d = tors.random_deltas(b, gen, cfg.torsion_fraction) if tors is not None else None
+            X = place_flex(C, idx, R, t, d, tors)
+            sc, cl = scorer.evaluate(X, full=False)
+            if tors is not None:
+                e_in, hard = tors.intra(X)
+                sc, cl = sc + e_in, cl | hard
+                dls[s:s + b] = d.cpu().numpy()
             free += int((~cl).sum())
             scores[s:s + b] = sc.cpu().numpy()
             conf[s:s + b] = idx.cpu().numpy()
@@ -110,9 +143,10 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site):
             ts[s:s + b] = t.cpu().numpy()
     top = np.argsort(scores)[:cfg.n_optimize]
     conf_t = torch.as_tensor(conf[top], device=device)
-    Rf, tf = polish(scorer, C, conf_t, torch.as_tensor(Rs[top], device=device),
-                    torch.as_tensor(ts[top], device=device), ctr, cfg, gen, cfg.opt_steps)
-    sc, clash = score_population(scorer, C, conf_t, Rf, tf)
+    dl_t = torch.as_tensor(dls[top], device=device) if tors is not None else None
+    Rf, tf, dlf = polish(scorer, C, conf_t, torch.as_tensor(Rs[top], device=device),
+                         torch.as_tensor(ts[top], device=device), ctr, cfg, gen, cfg.opt_steps, tors, dl_t)
+    sc, clash = score_population(scorer, C, conf_t, Rf, tf, tors, dlf)
     mutation = None
     if cfg.mutation_rounds > 0:
         best_before = float(sc[~clash].min()) if (~clash).any() else None
@@ -128,9 +162,15 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site):
             t_new = tf[p] + cfg.mutation_shift * torch.randn(nb, 3, generator=gen, device=device)
             swap = torch.rand(nb, generator=gen, device=device) < cfg.mutation_swap
             c_new = torch.where(swap, torch.randint(len(C), (nb,), generator=gen, device=device), conf_t[p])
-            Rc, tc = polish(scorer, C, c_new, R_new, t_new, ctr, cfg, gen, cfg.mutation_steps)
-            sc_c, cl_c = score_population(scorer, C, c_new, Rc, tc)
+            d_new = None
+            if tors is not None:
+                d_new = dlf[p] + cfg.mutation_torsion * torch.randn(nb, K, generator=gen, device=device)
+                d_new = torch.where(swap[:, None], torch.zeros_like(d_new), d_new)
+            Rc, tc, dc = polish(scorer, C, c_new, R_new, t_new, ctr, cfg, gen, cfg.mutation_steps, tors, d_new)
+            sc_c, cl_c = score_population(scorer, C, c_new, Rc, tc, tors, dc)
             conf_t, Rf, tf = torch.cat([conf_t, c_new]), torch.cat([Rf, Rc]), torch.cat([tf, tc])
+            if tors is not None:
+                dlf = torch.cat([dlf, dc])
             sc, clash = np.concatenate([sc, sc_c]), np.concatenate([clash, cl_c])
             children += nb
         best_after = float(sc[~clash].min()) if (~clash).any() else None
@@ -141,8 +181,9 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site):
     step = scorer.chunk(False, True)
     with torch.no_grad():
         for s in range(0, len(conf_t), step):
-            X = place(C, conf_t[s:s + step], Rf[s:s + step], tf[s:s + step])
-            bad = torch.as_tensor(clash[s:s + step], device=device)
+            sl = slice(s, s + step)
+            X = place_flex(C, conf_t[sl], Rf[sl], tf[sl], dlf[sl] if tors is not None else None, tors)
+            bad = torch.as_tensor(clash[sl], device=device)
             partners += scorer.clash_partners(X[bad]).float() if bool(bad.any()) else 0
             Xf.append(X.cpu().numpy())
     X, conf_pop = np.concatenate(Xf), conf_t.cpu().numpy()
@@ -155,6 +196,6 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site):
     else:
         keep = diverse(X[:, heavy, :], order, cfg.diversity_rmsd, cfg.n_qm * 3)
     diag = {"random_clash_free": free / n, "optimized": len(top), "optimized_clash_free": int((~clash[:len(top)]).sum()),
-            "partners": partners.cpu().numpy(), "mutation": mutation}
+            "partners": partners.cpu().numpy(), "mutation": mutation, "torsions": K}
     return PoseSet(X[keep].astype(float), conf_pop[keep], sc[keep].astype(float),
                    np.full(len(keep), site, dtype=int), diag)

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 from rdkit import Chem
 
-from qmdock.chem.ligand import build_conformers
+from qmdock.chem.ligand import build_conformers, rotatable_bonds
 from qmdock.qm.jobs import energy_job, numbers_of, relax_job
 from qmdock.qm.pool import log
 from qmdock.search.clustering import auto_radius, symmetry_permutations
@@ -19,6 +19,7 @@ class LigandData:
     charge: int
     perms: np.ndarray
     family_radius: float
+    rotors: list = field(default_factory=list)
     conf_coords: np.ndarray = None
     conf_e: dict = field(default_factory=dict)
     e_ref: float = None
@@ -41,8 +42,10 @@ def describe_ligand(cfg, mol):
         perms = np.arange(n_heavy)[None, :]
     radius = cfg.cluster_radius or auto_radius(n_heavy)
     medium = f", solvent {cfg.solvent} ({cfg.solvation_model})" if cfg.solvent else ", gas phase"
-    log(f"ligand: {len(elements)} atoms, charge {charge}{medium}")
-    return LigandData(mol, elements, numbers, heavy, charge, perms, radius)
+    rotors = rotatable_bonds(mol, cfg.max_torsions) if cfg.torsions else []
+    flex = f", {len(rotors)} rotatable bond(s) searched" if rotors else (", torsion search skipped (no rotatable bonds)" if cfg.torsions else "")
+    log(f"ligand: {len(elements)} atoms, charge {charge}{medium}{flex}")
+    return LigandData(mol, elements, numbers, heavy, charge, perms, radius, rotors)
 
 
 def prepare_conformers(cfg, lig, runner):

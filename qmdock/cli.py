@@ -48,6 +48,9 @@ def main():
     p.add_argument("--mutation-children", type=int, default=10)
     p.add_argument("--joint-states", action="store_true")
     p.add_argument("--transfer-rmsd", type=float, default=1.0)
+    p.add_argument("--torsions", action="store_true")
+    p.add_argument("--max-torsions", type=int, default=12)
+    p.add_argument("--torsion-fraction", type=float, default=0.5)
     p.add_argument("--export-dft", type=int, default=0)
     p.add_argument("--workers", type=int, default=0)
     p.add_argument("--device", default="auto")
@@ -64,7 +67,8 @@ def main():
                  solvation_model=a.solvation_model, selection=a.selection, cluster_radius=a.cluster_radius,
                  cluster_expand=a.cluster_expand, expand_members=a.expand_members,
                  expand_window=a.expand_window, cluster_pool=a.cluster_pool, dry_run=a.dry_run,
-                 reuse_fast=a.reuse_fast, export_dft=a.export_dft, joint_states=a.joint_states, transfer_rmsd=a.transfer_rmsd, mutation_rounds=a.mutation_rounds,
+                 reuse_fast=a.reuse_fast, export_dft=a.export_dft, torsions=a.torsions, max_torsions=a.max_torsions,
+                 torsion_fraction=a.torsion_fraction, joint_states=a.joint_states, transfer_rmsd=a.transfer_rmsd, mutation_rounds=a.mutation_rounds,
                  mutation_parents=a.mutation_parents, mutation_children=a.mutation_children, workers=a.workers, device=a.device,
                  seed=a.seed)
     from qmdock.pipeline.run import run

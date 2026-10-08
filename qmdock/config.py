@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 HARTREE_TO_KCAL = 627.509474
 BOHR_TO_ANG = 0.529177210903
-VERSION = "0.7"
+VERSION = "0.8"
 
 
 @dataclass
@@ -54,6 +54,12 @@ class Config:
     dry_run: bool = False
     reuse_fast: bool = False
     export_dft: int = 0
+    torsions: bool = False
+    max_torsions: int = 12
+    torsion_fraction: float = 0.5
+    torsion_lr: float = 0.15
+    torsion_penalty: float = 0.03
+    mutation_torsion: float = 0.5
     joint_states: bool = False
     transfer_rmsd: float = 1.0
     mutation_rounds: int = 0

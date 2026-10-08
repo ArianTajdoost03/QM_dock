@@ -11,6 +11,7 @@ from qmdock.search.clustering import cluster_poses, pairwise_rmsd, representativ
 from qmdock.search.poses import PoseSet, diverse
 from qmdock.search.sampling import search
 from qmdock.search.scoring import Scorer
+from qmdock.search.torsions import TorsionModel
 
 
 @dataclass
@@ -28,6 +29,7 @@ class Selection:
     groups: list = None
     dist: np.ndarray = None
     rejected: dict = field(default_factory=dict)
+    flex: bool = False
 
 
 def pick_device(name):
@@ -58,17 +60,18 @@ def fast_stage(cfg, receptor, lig, centers, warnings):
     extent = ligand_extent(lig)
     log(f"fast stage on {device}, {len(centers)} site(s)")
     sets, scale_used = [], 1.0
+    tors = TorsionModel(lig.rotors, lig.mol, device) if lig.rotors else None
     for i, c in enumerate(centers):
         env = receptor.environment(c, cfg.search_radius + extent + cfg.env_margin)
         scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, cfg)
-        ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), cfg, cfg.seed + i, i)
+        ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), cfg, cfg.seed + i, i, tors)
         for factor in (0.9, 0.8, 0.7):
             if len(ps):
                 break
             log(f"  no clash-free pose; retrying with clash thresholds scaled by {factor}")
             soft = replace(cfg, clash_heavy=cfg.clash_heavy * factor, clash_hydrogen=cfg.clash_hydrogen * factor)
             scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, soft)
-            ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), soft, cfg.seed + i, i)
+            ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), soft, cfg.seed + i, i, tors)
             if len(ps):
                 scale_used = min(scale_used, factor)
                 warnings.append(f"site {i}: poses found only with clash thresholds scaled by {factor}")
@@ -140,4 +143,4 @@ def select_poses(cfg, receptor, lig, pool):
     if usable == 0:
         raise RuntimeError("no eligible receptor unit or residue lies within the shell of any pose")
     log(f"selected {len(first)} poses for QM")
-    return Selection(poses, first, groups, dist)
+    return Selection(poses, first, groups, dist, flex=bool(lig.rotors))

@@ -33,6 +33,39 @@ def heavy_mappings(template, state):
     return np.array(matches, dtype=int)
 
 
+def hydrogens_by_parent(mol):
+    out = {}
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() == 1:
+            out.setdefault(atom.GetNeighbors()[0].GetIdx(), []).append(atom.GetIdx())
+    return out
+
+
+def transfer_exact(lig_t, lig_s, poses, mapping):
+    flat = Chem.RemoveHs(lig_s.mol)
+    s_heavy = [a.GetIdx() for a in lig_s.mol.GetAtoms() if a.GetAtomicNum() > 1]
+    t_heavy = np.where(lig_t.heavy)[0]
+    if flat.GetNumAtoms() != len(s_heavy):
+        raise ValueError("cannot rebuild hydrogens for this protonation state")
+    coords = np.zeros((len(poses), lig_s.n_atoms, 3))
+    for p in range(len(poses)):
+        conf = Chem.Conformer(len(s_heavy))
+        for i, xyz in enumerate(poses.coords[p][t_heavy][mapping]):
+            conf.SetAtomPosition(i, [float(v) for v in xyz])
+        mol = Chem.Mol(flat)
+        mol.RemoveAllConformers()
+        mol.AddConformer(conf)
+        full = Chem.AddHs(mol, addCoords=True)
+        xyz_full = full.GetConformer().GetPositions()
+        for i, idx in enumerate(s_heavy):
+            coords[p, idx] = xyz_full[i]
+        h_new, h_old = hydrogens_by_parent(full), hydrogens_by_parent(lig_s.mol)
+        for i, idx in enumerate(s_heavy):
+            for a, b in zip(h_new.get(i, []), h_old.get(idx, [])):
+                coords[p, b] = xyz_full[a]
+    return coords
+
+
 def kabsch_batch(P, Q):
     pm = P.mean(axis=1, keepdims=True)
     qm = Q.mean(axis=0)
@@ -70,12 +103,16 @@ def transfer_selection(cfg, receptor, lig_t, lig_s, sel_t, pool):
     conf_heavy = conf_all[:, s_heavy, :]
     poses = sel_t.poses
     P = len(poses)
-    coords = np.zeros((P, lig_s.n_atoms, 3))
     conf = np.zeros(P, dtype=int)
     rmsds = np.zeros(P)
-    for p in range(P):
-        rmsd, c, xyz = transfer_pose(poses.coords[p][t_heavy], conf_heavy, conf_all, mappings)
-        coords[p], conf[p], rmsds[p] = xyz, keys[c], rmsd
+    if sel_t.flex:
+        coords = transfer_exact(lig_t, lig_s, poses, mappings[0])
+        conf[:] = keys[0]
+    else:
+        coords = np.zeros((P, lig_s.n_atoms, 3))
+        for p in range(P):
+            rmsd, c, xyz = transfer_pose(poses.coords[p][t_heavy], conf_heavy, conf_all, mappings)
+            coords[p], conf[p], rmsds[p] = xyz, keys[c], rmsd
 
     soft = replace(cfg, clash_heavy=cfg.clash_heavy * pool.clash_scale * 0.95,
                    clash_hydrogen=cfg.clash_hydrogen * pool.clash_scale * 0.95)
@@ -102,4 +139,4 @@ def transfer_selection(cfg, receptor, lig_t, lig_s, sel_t, pool):
     log(f"  transferred {P - len(rejected)}/{P} poses (max heavy-atom RMSD {rmsds.max():.2f} A, "
         f"{sum(1 for r in rejected.values() if r == 'clash')} clashes)")
     info = {"transfer_rejected": len(rejected), "max_transfer_rmsd": float(rmsds.max())}
-    return Selection(new, first, sel_t.groups, sel_t.dist, rejected), info
+    return Selection(new, first, sel_t.groups, sel_t.dist, rejected, sel_t.flex), info

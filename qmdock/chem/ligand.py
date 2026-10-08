@@ -42,3 +42,38 @@ def build_conformers(mol, n, seed, window, prune, threads=0):
         out.AddConformer(Chem.Conformer(work.GetConformer(i)), assignId=True)
     coords = np.array([c.GetPositions() for c in out.GetConformers()])
     return Conformers(out, coords, energies[order])
+
+
+ROTOR = Chem.MolFromSmarts("[!D1&!$(*#*)]-&!@[!D1&!$(*#*)]")
+AMIDE = Chem.MolFromSmarts("[CX3](=[OX1])-[NX3]")
+
+
+def side_atoms(mol, start, blocked):
+    seen, stack = {start}, [start]
+    while stack:
+        atom = stack.pop()
+        for nb in mol.GetAtomWithIdx(atom).GetNeighbors():
+            j = nb.GetIdx()
+            if j != blocked and j not in seen:
+                seen.add(j)
+                stack.append(j)
+    return seen
+
+
+def rotatable_bonds(mol, max_torsions):
+    heavy = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
+    flat = Chem.RemoveHs(mol)
+    if flat.GetNumAtoms() != len(heavy):
+        return []
+    amide = {frozenset((heavy[m[0]], heavy[m[2]])) for m in flat.GetSubstructMatches(AMIDE)}
+    rotors = []
+    for i, j in flat.GetSubstructMatches(ROTOR):
+        a, b = heavy[i], heavy[j]
+        if frozenset((a, b)) in amide:
+            continue
+        side_b, side_a = side_atoms(mol, b, a), side_atoms(mol, a, b)
+        if len(side_b) > len(side_a):
+            a, b, side_b = b, a, side_a
+        rotors.append((a, b, sorted(side_b)))
+    rotors.sort(key=lambda r: -len(r[2]))
+    return rotors[:max_torsions]
