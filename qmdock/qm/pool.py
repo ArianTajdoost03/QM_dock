@@ -5,10 +5,7 @@ from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 
 from qmdock.qm.engine import init_worker, run_job
-
-
-def log(msg):
-    print(msg, flush=True)
+from qmdock.ui import bar, log
 
 
 def default_workers():
@@ -52,27 +49,24 @@ class Runner:
             return {}
         t0 = time.time()
         results = {}
-        step = 1 if len(jobs) <= 100 else max(1, len(jobs) // 20)
+        with bar(len(jobs), label) as progress:
+            def record(r):
+                results[r["key"]] = r
+                progress.update(1)
 
-        def record(r):
-            results[r["key"]] = r
-            if len(results) % step == 0 or len(results) == len(jobs):
-                log(f"  {label}: {len(results)}/{len(jobs)} ({time.time() - t0:.0f}s, last job {r['seconds']:.0f}s)")
-
-        if self.pool is None:
-            for job in jobs:
-                record(self.fn(job))
-            return results
-        try:
-            for r in self.pool.map(self.fn, jobs, chunksize=1):
-                record(r)
-        except BrokenProcessPool:
-            log("  a worker process died (segfault or memory kill); rerunning unfinished jobs one per process")
-            self.pool.shutdown(cancel_futures=True)
-            self.pool = self._new_pool(self.workers)
-            for job in [j for j in jobs if j["key"] not in results]:
-                record(self.isolated(job))
+            if self.pool is None:
+                for job in jobs:
+                    record(self.fn(job))
+            else:
+                try:
+                    for r in self.pool.map(self.fn, jobs, chunksize=1):
+                        record(r)
+                except BrokenProcessPool:
+                    log("  a worker process died (segfault or memory kill); rerunning unfinished jobs one per process")
+                    self.pool.shutdown(cancel_futures=True)
+                    self.pool = self._new_pool(self.workers)
+                    for job in [j for j in jobs if j["key"] not in results]:
+                        record(self.isolated(job))
         crashed = sum(1 for r in results.values() if not r["ok"] and "crashed" in r.get("error", ""))
-        if crashed:
-            log(f"  {label}: {crashed} job(s) crashed the QM engine")
+        log(f"  {label}: {len(jobs)} jobs in {time.time() - t0:.0f}s" + (f", {crashed} crashed the QM engine" if crashed else ""))
         return results

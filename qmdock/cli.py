@@ -4,11 +4,11 @@ import faulthandler
 from qmdock.config import Config
 
 
-def main():
-    faulthandler.enable()
-    p = argparse.ArgumentParser(description="QM-ranked docking on crystal or metalloprotein surfaces")
+def build_parser(description, with_ligand=True):
+    p = argparse.ArgumentParser(description=description)
     p.add_argument("--receptor", required=True)
-    p.add_argument("--ligand", required=True)
+    if with_ligand:
+        p.add_argument("--ligand", required=True)
     p.add_argument("--out", default="run")
     p.add_argument("--center", nargs=3, type=float, action="append", metavar=("X", "Y", "Z"))
     p.add_argument("--auto-sites", type=int, default=0)
@@ -55,8 +55,11 @@ def main():
     p.add_argument("--workers", type=int, default=0)
     p.add_argument("--device", default="auto")
     p.add_argument("--seed", type=int, default=7)
-    a = p.parse_args()
-    cfg = Config(receptor=a.receptor, ligand=a.ligand, out=a.out,
+    return p
+
+
+def config_from_args(a, ligand):
+    return Config(receptor=a.receptor, ligand=ligand, out=a.out,
                  centers=[tuple(c) for c in a.center] if a.center else [], auto_sites=a.auto_sites,
                  search_radius=a.search_radius, ligand_charge=a.ligand_charge,
                  n_conformers=a.n_conformers, n_random=a.n_random, n_optimize=a.n_optimize, opt_steps=a.opt_steps, prerelax_steps=a.prerelax_steps,
@@ -71,6 +74,11 @@ def main():
                  torsion_fraction=a.torsion_fraction, joint_states=a.joint_states, transfer_rmsd=a.transfer_rmsd, mutation_rounds=a.mutation_rounds,
                  mutation_parents=a.mutation_parents, mutation_children=a.mutation_children, workers=a.workers, device=a.device,
                  seed=a.seed)
+
+
+def main():
+    faulthandler.enable()
+    a = build_parser("QM-ranked docking on crystal or metalloprotein surfaces").parse_args()
     from qmdock.pipeline.run import run
 
-    run(cfg)
+    run(config_from_args(a, a.ligand))

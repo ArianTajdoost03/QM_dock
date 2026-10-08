@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 HARTREE_TO_KCAL = 627.509474
 BOHR_TO_ANG = 0.529177210903
-VERSION = "0.8"
+VERSION = "0.9"
 
 
 @dataclass

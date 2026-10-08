@@ -96,6 +96,19 @@ def run_joint(cfg, states, receptor, runner, session):
     return rows
 
 
+def dock_molecule(cfg, base, receptor, runner, session):
+    states = ligand_states(base, cfg.protonation, cfg.ph_min, cfg.ph_max, cfg.max_states, cfg.seed)
+    if len(states) == 1:
+        row = state_row(0, states[0], cfg)
+        dock_state(cfg, states[0]["mol"], receptor, runner, session)
+        add_summary(row, cfg.out)
+        return [row]
+    os.makedirs(cfg.out, exist_ok=True)
+    for i, st in enumerate(states):
+        log(f"state {i}: {st['smiles']} (charge {st['charge']}, {st['label']})")
+    return (run_joint if cfg.joint_states else run_sequential)(cfg, states, receptor, runner, session)
+
+
 def run(cfg):
     log(f"qmdock {VERSION}")
     preflight(cfg.solvent, cfg.solvation_model)
