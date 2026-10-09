@@ -1,66 +1,73 @@
 # qmdock
 
-QM-ranked docking for crystal surfaces and metalloprotein pockets. Poses are generated with a fast GPU steric score, then ranked with GFN2-xTB (tblite) on whole-molecule pocket clusters.
+Dock ligands into a metalloprotein pocket or onto a molecular crystal surface, and rank the poses with quantum-chemistry energies (GFN2-xTB). A fast GPU search proposes poses; only a small, diverse shortlist is scored with xTB on a cropped pocket.
 
 ## Install
 
 ```
-conda env create -f environment.yml
+conda env create -f environment.yml -n qmdock
 conda activate qmdock
-pytest tests
+pytest tests          # optional check
 ```
 
-## Run
+A CUDA GPU speeds up the pose search but is not required. `tblite` must come from the PyPI wheel (the environment file does this); mixing it into an environment with other QM packages can crash.
+
+## Quick start
+
+You need a receptor PDB **with explicit hydrogens** (waters are removed, metals are kept), a ligand SDF, and the pocket centre `X Y Z`.
+
+Dock one ligand:
 
 ```
-python dock.py --receptor beta_haematin_27cell.pdb --ligand ligand.sdf --center X Y Z --out run1
+python dock.py --receptor receptor.pdb --ligand ligand.sdf --center X Y Z --search-radius 6 --out run1 --workers 12
 ```
 
-`--center` can be repeated for several sites. `--auto-sites N` picks N surface patches. With neither, the centroid of the ligand in the SDF is used.
+Screen an SDF library against the same pocket:
 
-Useful options: `--workers` (CPU cores for GFN2), `--device cuda|cpu`, `--search-radius`, `--n-random`, `--n-qm`, `--max-cluster-atoms`, `--final-max-atoms`, `--relax-top`, `--relax-steps`, `--prerelax-steps`, `--ligand-charge`.
-
-## Proteins and metalloproteins
-
-Waters are removed by default (`--keep-waters` keeps them); metal ions are always kept. A covalently connected unit larger than 400 atoms is treated as a polymer. For a polymer the QM pocket is built from whole residues nearest the ligand, up to `--max-cluster-atoms`:
-
-- Metal ions within the shell are always included together with every residue that has an N, O or S within 2.8 A of the metal.
-- Broken peptide or disulfide bonds are capped with hydrogen link atoms placed along the cut bond.
-- The cluster charge is computed from the hydrogens present in the PDB (ASP/GLU/CYS/TYR deprotonated, LYS/ARG/HIS protonated, termini, metal ions +2 by default). Use a protonated receptor (explicit hydrogens).
-- A cluster with an odd electron count is rejected with status `odd_electron`.
-
-The fast search seeds a share of the random placements in free space inside the search sphere, so buried or conical pockets are sampled. If no pose survives the clash filter the thresholds are relaxed in three steps and a warning is written to `summary.json`.
-
-## Pipeline
-
-1. Receptor is split into covalently connected units (Fe-O links keep the hematin dimers whole). Units with an odd electron count or fewer than 10 atoms are kept for clash checks but never enter QM.
-2. Ligand gets explicit hydrogens, ETKDG conformers, MMFF pre-optimisation, then a GFN2 relaxation. The lowest GFN2 energy is the strain reference.
-3. Random rigid-body poses are scored on GPU with a Vina-like steric term, refined by batched gradient descent, clash-filtered and clustered by RMSD.
-4. Stage 1: GFN2 on the ligand plus the nearest whole units (default cap 300 atoms).
-5. Stage 2: short GFN2 relaxation of the ligand in the frozen pocket for the top poses.
-6. Stage 3: the top poses are rescored with a larger cluster (default cap 600 atoms). The final ranking uses the highest level reached.
-
-## Energies
-
-- `e_int` = E(complex) - E(pocket) - E(ligand at pose geometry)
-- `strain` = E(ligand at pose geometry) - E(best free conformer)
-- `e_bind` = `e_int` + `strain`
-- `e_final` is the value used for ranking, `level` says which stage produced it. Compare `e_final` only between poses of the same level.
+```
+python screen.py --receptor receptor.pdb --ligands ligands.sdf --center X Y Z --search-radius 6 --solvent water --out screen1 --workers 12
+```
 
 
-## Outputs
+## Output
 
-`results.csv`, `poses.sdf` (ranked, with energies as properties), `best_complex.xyz`, `summary.json` (timings, failures, energy gap to the next pose family).
+| Command | Files |
+|---|---|
+| `dock.py` | `results.csv` (ranked poses), `poses.sdf`, `best_complex.xyz`, `summary.json` |
+| `screen.py` | `screening_results.csv` (ranked ligands), `best_poses.sdf`, one folder per ligand with its log |
 
-## Speed
+Screening keeps the lowest-energy protonation state of each ligand and never stops on a bad ligand: the reason is written to the table.
 
-GFN2 cost grows roughly with the cube of the number of atoms. Measured on one core: a heme dimer plus this ligand (211 atoms) takes about 30 s; two dimers plus the ligand (about 359 atoms) takes several minutes. Cluster size is therefore the main cost.
+## How it works
 
-Defaults are chosen for a first pass:
+1. Ligand conformers are generated and relaxed with GFN2.
+2. A GPU search places them in the pocket: random starts, then gradient polishing (optionally with flexible torsions and mutation rounds).
+3. A diverse shortlist of poses is chosen (optionally grouped by RMSD clusters).
+4. GFN2 scores each pose on a pocket cut from the receptor, then relaxes the ligand and re-scores the best poses in a larger pocket.
 
-- Stage 1 (`--n-qm 30`, `--max-cluster-atoms 150`): the ligand plus the single nearest dimer.
-- Relaxation (`--relax-top 3`, `--relax-steps 5`): each step costs about three single points; `--relax-top 0` skips it.
-- Stage 3 (`--final-top 3`, `--final-max-atoms 300`): up to two dimers plus the ligand. This is the slowest stage; raise it only for the final shortlist.
-- Use `--workers` equal to the number of physical cores. The fast stage uses the GPU.
+```
+E_bind = E(complex) - E(pocket) - E(lowest-energy free ligand conformer)     (kcal/mol, lower is better)
+       = interaction energy + ligand strain
+```
 
-The fast stage costs about `n_random + 3 * n_optimize * opt_steps` pose evaluations; on CPU use `--n-random 20000 --n-optimize 300 --opt-steps 60`.
+## Main options
+
+| Option | Purpose |
+|---|---|
+| `--center`, `--search-radius` | Pocket position and size |
+| `--solvent water` | Implicit solvent in all QM calculations |
+| `--protonation pka\|all`, `--joint-states` | Dock protonation states; search poses once and share them |
+| `--selection cluster` | Group poses by RMSD before QM |
+| `--torsions` | Flexible rotatable bonds during the search |
+| `--n-qm`, `--max-cluster-atoms`, `--final-top` | Trade speed against accuracy |
+| `--workers`, `--device` | CPU cores for QM, `cuda` or `cpu` for the search |
+
+Run `python dock.py --help` for everything else.
+
+## Layout and details
+
+```
+dock.py  screen.py     entry points
+qmdock/                chem/ (receptor, ligand)  search/ (GPU poses)  qm/ (tblite)  pipeline/ (stages)  screening/
+tests/
+```

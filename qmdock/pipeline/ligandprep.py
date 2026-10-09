@@ -73,7 +73,7 @@ def prepare_conformers(cfg, lig, runner):
                 coords[c] = r["pos"]
     if not conf_e:
         errors = sorted({r.get("error", "") for r in res.values() if not r["ok"]})
-        raise RuntimeError(f"no conformer converged in GFN2: {errors[:3]}; run diagnose.py")
+        raise RuntimeError(f"no conformer converged in GFN2: {errors[:3]}; check the ligand charge and structure")
     e_ref = min(conf_e.values())
     log(f"ligand reference energy {e_ref:.6f} Ha ({len(conf_e)}/{n_conf} conformers converged)")
     return replace(lig, conf_coords=coords, conf_e=conf_e, e_ref=e_ref), time.time() - t

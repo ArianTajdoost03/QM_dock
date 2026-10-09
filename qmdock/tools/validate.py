@@ -32,47 +32,15 @@ def recovery(results_csv, poses_sdf, reference_sdf, threshold):
     return out
 
 
-def scan(complex_xyz, n_ligand, offsets, uhf=0, charge=0):
-    from qmdock.chem.elements import ATOMIC_NUMBER
-    from qmdock.qm.engine import solve
-
-    lines = open(complex_xyz).read().splitlines()[2:]
-    el = [l.split()[0] for l in lines]
-    xyz = np.array([[float(v) for v in l.split()[1:4]] for l in lines])
-    numbers = np.array([ATOMIC_NUMBER[e] for e in el], dtype=np.int32)
-    n_rec = len(el) - n_ligand
-    lig = xyz[n_rec:]
-    axis = lig.mean(axis=0) - xyz[:n_rec].mean(axis=0)
-    axis /= np.linalg.norm(axis)
-    e_lig = solve(numbers[n_rec:], lig, 0, uhf)[0]
-    e_rec = solve(numbers[:n_rec], xyz[:n_rec], charge, uhf)[0]
-    rows = []
-    for off in offsets:
-        pos = xyz.copy()
-        pos[n_rec:] = lig + off * axis
-        e = solve(numbers, pos, charge, uhf)[0]
-        rows.append({"offset_A": off, "e_int_kcal": (e - e_rec - e_lig) * 627.509474})
-    return pd.DataFrame(rows)
-
-
 def main():
-    p = argparse.ArgumentParser()
-    sub = p.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("recovery")
-    r.add_argument("--results", required=True)
-    r.add_argument("--poses", required=True)
-    r.add_argument("--reference", required=True)
-    r.add_argument("--threshold", type=float, default=2.0)
-    s = sub.add_parser("scan")
-    s.add_argument("--complex", required=True)
-    s.add_argument("--n-ligand", type=int, required=True)
-    s.add_argument("--offsets", type=float, nargs="+", default=[-0.4, 0.0, 0.4, 0.8, 1.5, 3.0])
+    p = argparse.ArgumentParser(description="Compare a finished docking run with a known ligand pose")
+    p.add_argument("--results", required=True, help="results.csv of the run")
+    p.add_argument("--poses", required=True, help="poses.sdf of the run")
+    p.add_argument("--reference", required=True, help="crystal ligand SDF in the receptor frame")
+    p.add_argument("--threshold", type=float, default=2.0, help="RMSD in A that counts as success")
     a = p.parse_args()
-    if a.cmd == "recovery":
-        for k, v in recovery(a.results, a.poses, a.reference, a.threshold).items():
-            print(f"{k}: {v}")
-    else:
-        print(scan(a.complex, a.n_ligand, a.offsets).to_string(index=False))
+    for k, v in recovery(a.results, a.poses, a.reference, a.threshold).items():
+        print(f"{k}: {v}")
 
 
 if __name__ == "__main__":
