@@ -4,7 +4,7 @@ import time
 import traceback
 from dataclasses import dataclass, replace
 
-from qmdock.chem.receptor import load_receptor
+from qmdock.chem.hydrogens import load_protonated
 from qmdock.pipeline.qmstages import Session
 from qmdock.pipeline.run import dock_molecule
 from qmdock.qm.engine import preflight
@@ -96,7 +96,7 @@ def screen(cfg, opts):
     n_bad = sum(1 for r in records if r.status != "ready")
     log(f"read {len(records)} ligand records from {opts.ligands} ({n_bad} will not be docked)")
     preflight(cfg.solvent, cfg.solvation_model)
-    receptor = load_receptor(cfg.receptor, cfg.min_unit_atoms, cfg.require_metal, remove_waters=not cfg.keep_waters)
+    receptor = load_protonated(cfg, cfg.out, log)
     workers = cfg.workers or default_workers()
     log(f"CPU workers: {workers}; protonation: {cfg.protonation}"
         f"{', joint states' if cfg.joint_states and cfg.protonation != 'none' else ''}")

@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 
 HARTREE_TO_KCAL = 627.509474
 BOHR_TO_ANG = 0.529177210903
-VERSION = "0.9"
 
 
 @dataclass
@@ -33,6 +32,8 @@ class Config:
     min_unit_atoms: int = 10
     require_metal: bool = False
     keep_waters: bool = False
+    add_hydrogens: bool = True
+    receptor_ph: float = 7.4
     protonation: str = "none"
     ph_min: float = 6.4
     ph_max: float = 8.4

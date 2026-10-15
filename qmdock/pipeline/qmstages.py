@@ -130,8 +130,8 @@ class Session:
         ok1 = sorted([p for p, r in stage1.items() if r["status"] == "ok"], key=lambda p: stage1[p]["e_bind"])
         if not ok1:
             counts = dict(Counter(r["status"] for r in stage1.values()))
-            raise RuntimeError(f"no pose could be scored by QM: {counts}. Check that all project files are from "
-                               "the same version and that the receptor is protonated (explicit hydrogens)")
+            raise RuntimeError(f"no pose could be scored by QM: {counts}. Check that the receptor "
+                               "is protonated (explicit hydrogens)")
         log(f"stage 1 done: {len(ok1)} scored, best {stage1[ok1[0]]['e_bind']:.2f} kcal/mol")
 
         relaxed = {}

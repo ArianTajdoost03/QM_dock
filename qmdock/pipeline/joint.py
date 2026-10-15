@@ -139,4 +139,5 @@ def transfer_selection(cfg, receptor, lig_t, lig_s, sel_t, pool):
     log(f"  transferred {P - len(rejected)}/{P} poses (max heavy-atom RMSD {rmsds.max():.2f} A, "
         f"{sum(1 for r in rejected.values() if r == 'clash')} clashes)")
     info = {"transfer_rejected": len(rejected), "max_transfer_rmsd": float(rmsds.max())}
-    return Selection(new, first, sel_t.groups, sel_t.dist, rejected, sel_t.flex), info
+    return Selection(new, first, sel_t.groups, sel_t.dist, rejected, sel_t.flex, sel_t.origin,
+                     sel_t.centers), info

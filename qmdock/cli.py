@@ -28,6 +28,8 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--relax-steps", type=int, default=5)
     p.add_argument("--uhf", type=int, default=0)
     p.add_argument("--keep-waters", action="store_true")
+    p.add_argument("--no-add-hydrogens", dest="add_hydrogens", action="store_false")
+    p.add_argument("--receptor-ph", type=float, default=7.4)
     p.add_argument("--protonation", choices=("none", "pka", "all"), default="none")
     p.add_argument("--ph-min", type=float, default=6.4)
     p.add_argument("--ph-max", type=float, default=8.4)
@@ -65,7 +67,8 @@ def config_from_args(a, ligand):
                  n_conformers=a.n_conformers, n_random=a.n_random, n_optimize=a.n_optimize, opt_steps=a.opt_steps, prerelax_steps=a.prerelax_steps,
                  n_qm=a.n_qm, shell=a.shell, max_cluster_atoms=a.max_cluster_atoms, final_top=a.final_top,
                  final_max_atoms=a.final_max_atoms, relax_top=a.relax_top, relax_steps=a.relax_steps,
-                 uhf=a.uhf, require_metal=a.require_metal, keep_waters=a.keep_waters, protonation=a.protonation, ph_min=a.ph_min,
+                 uhf=a.uhf, require_metal=a.require_metal, keep_waters=a.keep_waters, add_hydrogens=a.add_hydrogens,
+                 receptor_ph=a.receptor_ph, protonation=a.protonation, ph_min=a.ph_min,
                  ph_max=a.ph_max, max_states=a.max_states, solvent=a.solvent,
                  solvation_model=a.solvation_model, selection=a.selection, cluster_radius=a.cluster_radius,
                  cluster_expand=a.cluster_expand, expand_members=a.expand_members,

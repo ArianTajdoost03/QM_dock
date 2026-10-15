@@ -1,14 +1,13 @@
 import json
 import os
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pandas as pd
 
 from qmdock.chem.ligand import load_ligand
 from qmdock.chem.protonation import ligand_states
-from qmdock.chem.receptor import load_receptor
-from qmdock.config import VERSION
+from qmdock.chem.hydrogens import load_protonated
 from qmdock.pipeline.estimate import report_dry_run
 from qmdock.pipeline.fast import get_pool, select_poses
 from qmdock.pipeline.joint import transfer_selection
@@ -29,7 +28,7 @@ def dock_state(cfg, mol, receptor, runner, session):
         report_dry_run(cfg, receptor, sel, lig, runner.workers)
         return None
     res = session.run(lig, sel)
-    return write_results(cfg, cfg.out, lig, sel, res, timings, warnings)[0]
+    return write_results(cfg, cfg.out, lig, sel, res, timings, warnings, receptor)[0]
 
 
 def state_row(i, st, sub):
@@ -87,7 +86,7 @@ def run_joint(cfg, states, receptor, runner, session):
                 sel_i, info = transfer_selection(sub, receptor, lig_t, lig_i, sel_t, pool)
                 row.update(info)
             res = session.run(lig_i, sel_i)
-            write_results(sub, sub.out, lig_i, sel_i, res, timings, warnings)
+            write_results(sub, sub.out, lig_i, sel_i, res, timings, warnings, receptor)
             add_summary(row, sub.out)
         except (RuntimeError, ValueError) as exc:
             row["error"] = str(exc)[:300]
@@ -110,7 +109,9 @@ def dock_molecule(cfg, base, receptor, runner, session):
 
 
 def run(cfg):
-    log(f"qmdock {VERSION}")
+    os.makedirs(cfg.out, exist_ok=True)
+    with open(os.path.join(cfg.out, "config.json"), "w") as f:
+        json.dump(asdict(cfg), f, indent=2)
     preflight(cfg.solvent, cfg.solvation_model)
     base = load_ligand(cfg.ligand)
     if not cfg.centers and not cfg.auto_sites:
@@ -119,7 +120,7 @@ def run(cfg):
     workers = cfg.workers or default_workers()
     log(f"CPU workers: {workers}")
     t = time.time()
-    receptor = load_receptor(cfg.receptor, cfg.min_unit_atoms, cfg.require_metal, remove_waters=not cfg.keep_waters)
+    receptor = load_protonated(cfg, cfg.out, log)
     for (formula, status), n in sorted(receptor.summary().items()):
         log(f"receptor unit {formula}: {n} x {status}")
     log(f"receptor loaded in {time.time() - t:.1f}s")

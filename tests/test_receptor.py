@@ -1,6 +1,6 @@
 import numpy as np
 
-from qmdock.chem.receptor import load_receptor
+from qmdock.chem.receptor import hydrogen_warning, load_receptor
 
 
 def pdb_line(i, name, el, x, y, z):
@@ -45,3 +45,14 @@ def test_waters_removed_by_default(tmp_path):
     rec = load_receptor(str(path), min_unit_atoms=1)
     assert list(rec.elements) == ["Zn"]
     assert len(load_receptor(str(path), min_unit_atoms=1, remove_waters=False).elements) == 4
+
+
+def test_hydrogen_warning(tmp_path):
+    protonated = tmp_path / "h.pdb"
+    protonated.write_text("".join(water(1, 0.0)))
+    bare = tmp_path / "b.pdb"
+    bare.write_text("".join(pdb_line(i, "C1", "C", 3.0 * i, 0, 0) for i in range(1, 6)))
+    rec_h = load_receptor(str(protonated), min_unit_atoms=3, remove_waters=False)
+    rec_b = load_receptor(str(bare), min_unit_atoms=1, remove_waters=False)
+    assert hydrogen_warning(rec_h) is None
+    assert hydrogen_warning(rec_b) is not None

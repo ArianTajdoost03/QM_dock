@@ -1,0 +1,5 @@
+mkdir -p raw_pdbs
+tr -d '\r' < ids_213.txt | while read id; do
+  [ -s raw_pdbs/$id.pdb ] || curl -sfL -o raw_pdbs/$id.pdb "https://files.rcsb.org/download/${id^^}.pdb" || echo "FAILED $id"
+done
+ls raw_pdbs | wc -l

@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 
+from qmdock.chem.elements import METALS
 from qmdock.chem.pdb_io import write_xyz
 from qmdock.qm.pool import log
 from qmdock.search.clustering import sym_rmsd
@@ -20,6 +21,8 @@ def pose_table(sel, res):
                "fast_score": float(poses.score[p]), "status": status}
         if sel.groups:
             row["cluster"] = res.cluster_of.get(p)
+        if sel.origin is not None:
+            row["pool_index"] = int(sel.origin[p])
         for k in ("n_atoms", "skipped_units", "truncated_units", "scf_attempt", "e_int", "strain", "e_bind"):
             if k in s1:
                 row[k] = s1[k]
@@ -71,7 +74,19 @@ def export_dft(cfg, out, lig, res, ranked, final_coords, best):
     log(f"exported {len(top_ids)} pose(s) for DFT to {os.path.join(out, 'dft_export')}")
 
 
-def write_results(cfg, out, lig, sel, res, timings, warnings):
+def site_metrics(sel, lig, coords, site, receptor):
+    heavy = coords[lig.heavy]
+    out = {}
+    if sel.centers:
+        out["best_centroid_to_center_A"] = float(np.linalg.norm(heavy.mean(axis=0) - np.array(sel.centers[site])))
+    if receptor is not None:
+        metals = receptor.coords[np.isin(receptor.elements, METALS)]
+        if len(metals):
+            out["best_nearest_metal_A"] = float(np.linalg.norm(heavy[:, None, :] - metals[None], axis=2).min())
+    return out
+
+
+def write_results(cfg, out, lig, sel, res, timings, warnings, receptor=None):
     os.makedirs(out, exist_ok=True)
     if sel.groups:
         write_cluster_table(out, sel, res)
@@ -108,14 +123,18 @@ def write_results(cfg, out, lig, sel, res, timings, warnings):
     gap = float(distinct.e_final.min() - best.e_final) if len(distinct) else None
     timings = dict(timings)
     timings["qm"] = res.seconds
+    site = site_metrics(sel, lig, final_coords[top], int(sel.poses.site[top]), receptor)
     summary = {"best_pose": top, "best_e_final_kcal": float(best.e_final), "best_level": int(best.level),
                "gap_to_next_family_kcal": gap, "n_poses_qm": len(res.stage1),
                "n_failed": int((df.status == "scf_failed").sum()), "timings_s": timings,
                "warnings": list(warnings) + list(res.warnings), "ligand_charge": lig.charge,
                "solvent": cfg.solvent, "selection": cfg.selection,
                "n_clusters": len(sel.groups) if sel.groups else None, "n_poses_evaluated": len(res.stage1),
-               "n_transfer_rejected": len(sel.rejected)}
+               "n_transfer_rejected": len(sel.rejected), **site}
     with open(os.path.join(out, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
     log(f"best pose {top}: {best.e_final:.2f} kcal/mol (level {int(best.level)}), gap to next family {gap}")
+    log("timings: " + ", ".join(f"{k} {v:.0f}s" for k, v in timings.items()))
+    if site:
+        log("best pose location: " + ", ".join(f"{k.replace('best_', '').replace('_A', '')} {v:.1f} A" for k, v in site.items()))
     return ranked, summary

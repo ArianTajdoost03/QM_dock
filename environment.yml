@@ -8,6 +8,8 @@ dependencies:
   - scipy
   - pandas
   - rdkit
+  - openmm
+  - pdbfixer
   - pytest
   - pip
   - pip:

@@ -9,6 +9,7 @@ from qmdock.chem.elements import ATOMIC_NUMBER, BOND_TOLERANCE, COVALENT_RADII, 
 from qmdock.chem.pdb_io import read_pdb
 
 COORDINATION_CUTOFF = 2.8
+MIN_HYDROGEN_FRACTION = 0.3
 
 
 @dataclass
@@ -55,6 +56,9 @@ class Receptor:
     residue_of_atom: np.ndarray
     residues: list
     residue_atoms: list
+
+    def hydrogen_fraction(self):
+        return float((self.elements == "H").sum()) / max(1, int((self.elements != "H").sum()))
 
     def environment(self, center, radius):
         return np.array(sorted(self.tree.query_ball_point(center, radius)), dtype=int)
@@ -243,3 +247,11 @@ def find_surface_sites(receptor, n, spacing, seed=7, probe=4.0):
             break
         sites.append(cand[int(np.argmax(d))])
     return [tuple(float(x) for x in s) for s in sites]
+
+
+def hydrogen_warning(receptor):
+    fraction = receptor.hydrogen_fraction()
+    if fraction >= MIN_HYDROGEN_FRACTION:
+        return None
+    return (f"receptor has only {fraction:.2f} hydrogens per heavy atom; add hydrogens "
+            "or the QM energies are meaningless")

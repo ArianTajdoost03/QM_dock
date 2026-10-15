@@ -30,6 +30,8 @@ class Selection:
     dist: np.ndarray = None
     rejected: dict = field(default_factory=dict)
     flex: bool = False
+    origin: list = None
+    centers: list = None
 
 
 def pick_device(name):
@@ -128,19 +130,20 @@ def select_poses(cfg, receptor, lig, pool):
     order = np.argsort(pool_poses.score)
     groups = dist = None
     if cfg.selection == "cluster":
-        poses = pool_poses.take([int(i) for i in order[:cfg.cluster_pool]])
+        origin = [int(i) for i in order[:cfg.cluster_pool]]
+        poses = pool_poses.take(origin)
         dist = pairwise_rmsd(poses.coords[:, lig.heavy, :], lig.perms)
         groups = cluster_poses(dist, poses.score, lig.family_radius)
         first = representatives(groups, cfg.n_qm)
         log(f"clustered {len(poses)} poses into {len(groups)} groups (radius {lig.family_radius:.2f} A); "
             f"{len(first)} representatives go to QM")
     else:
-        keep = diverse(pool_poses.coords[:, lig.heavy, :], order, cfg.diversity_rmsd, cfg.n_qm)
-        poses = pool_poses.take(keep)
+        origin = diverse(pool_poses.coords[:, lig.heavy, :], order, cfg.diversity_rmsd, cfg.n_qm)
+        poses = pool_poses.take(origin)
         first = list(range(len(poses)))
     usable = sum(1 for p in first
                  if receptor.build_cluster(poses.coords[p], cfg.shell, cfg.max_cluster_atoms) is not None)
     if usable == 0:
         raise RuntimeError("no eligible receptor unit or residue lies within the shell of any pose")
     log(f"selected {len(first)} poses for QM")
-    return Selection(poses, first, groups, dist, flex=bool(lig.rotors))
+    return Selection(poses, first, groups, dist, flex=bool(lig.rotors), origin=origin, centers=pool.centers)
