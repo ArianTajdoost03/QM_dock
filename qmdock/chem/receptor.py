@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -56,6 +56,7 @@ class Receptor:
     residue_of_atom: np.ndarray
     residues: list
     residue_atoms: list
+    metal_partners: dict = field(default_factory=dict)
 
     def hydrogen_fraction(self):
         return float((self.elements == "H").sum()) / max(1, int((self.elements != "H").sum()))
@@ -121,6 +122,26 @@ class Receptor:
         return {int(self.residue_of_atom[i]) for i in near
                 if self.elements[i] in ("N", "O", "S") and self.residue_of_atom[i] != r0}
 
+    def metal_site(self, residues):
+        site = set()
+        pending = list(residues)
+        while pending:
+            r = pending.pop()
+            atoms = self.residue_atoms[r]
+            if len(atoms) == 1 and self.elements[atoms[0]] in METALS:
+                metals = [r]
+            else:
+                metals = self.metal_partners.get(r, ())
+            for m in metals:
+                if m in site:
+                    continue
+                site.add(m)
+                for q in self.coordinating_residues(self.residue_atoms[m][0]):
+                    if q not in site:
+                        site.add(q)
+                        pending.append(q)
+        return site
+
     def build_cluster(self, lig_coords, shell, max_atoms=None):
         hits = self.tree.query_ball_point(lig_coords, shell)
         ids = np.unique(np.concatenate([np.asarray(h, dtype=int) for h in hits]))
@@ -138,13 +159,7 @@ class Receptor:
         skipped = sum(1 for u in units if not self.eligible[u] and self.reasons[u] != "fragment")
         units = {u: d for u, d in units.items() if self.eligible[u]}
 
-        forced = set()
-        for r in list(res):
-            atoms = self.residue_atoms[r]
-            if len(atoms) == 1 and self.elements[atoms[0]] in METALS:
-                forced.add(r)
-                forced |= self.coordinating_residues(atoms[0])
-        chosen_res = set(forced)
+        chosen_res = self.metal_site(res)
         chosen_units = []
         total = sum(len(self.residue_atoms[r]) for r in chosen_res)
         cands = sorted([(d, "u", u) for u, d in units.items()] + [(d, "r", r) for r, d in res.items()
@@ -171,8 +186,10 @@ class Receptor:
         for i in atoms:
             if not self.polymer[self.unit_of_atom[i]]:
                 continue
+            if self.elements[i] in METALS:
+                continue
             for j in self.neighbors[i]:
-                if not selected[j]:
+                if not selected[j] and self.elements[j] not in METALS:
                     v = self.coords[j] - self.coords[i]
                     cap_xyz.append(self.coords[i] + v / np.linalg.norm(v) * LINK_BOND.get(self.elements[i], 1.09))
                     cap_el.append("H")
@@ -225,8 +242,13 @@ def load_receptor(path, min_unit_atoms=10, require_metal=False, tolerance=BOND_T
             eligible[u], reasons[u] = False, "odd-electron"
         elif require_metal and not any(e in METALS for e in atoms.elements[idx]):
             eligible[u], reasons[u] = False, "no-metal"
+    metal_partners = {}
+    for m in np.where(np.isin(atoms.elements, METALS))[0]:
+        for i in tree.query_ball_point(coords[m], COORDINATION_CUTOFF):
+            if atoms.elements[i] in ("N", "O", "S") and residue_of_atom[i] != residue_of_atom[m]:
+                metal_partners.setdefault(int(residue_of_atom[i]), set()).add(int(residue_of_atom[m]))
     return Receptor(atoms.elements, coords, atoms.names, tree, labels, unit_atoms, eligible, reasons,
-                    polymer, neighbors, residue_of_atom, residues, residue_atoms)
+                    polymer, neighbors, residue_of_atom, residues, residue_atoms, metal_partners)
 
 
 def find_surface_sites(receptor, n, spacing, seed=7, probe=4.0):

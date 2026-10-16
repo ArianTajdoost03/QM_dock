@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from qmdock.chem.hydrogens import (fix_metal_sites, line_xyz, load_protonated, regularize_hydrogens,
-                                   split_receptor_lines)
+from qmdock.chem.hydrogens import (carboxylate_ok, fix_metal_sites, line_xyz, load_protonated, regularize_hydrogens,
+                                   split_receptor_lines, terminal_oxygens)
 from qmdock.chem.receptor import load_receptor
 
 CA2 = Path(__file__).parent.parent / "data" / "carbonic anhydrase 2" / "1A42.pdb"
@@ -104,3 +104,29 @@ def test_add_hydrogens_can_be_disabled(tmp_path):
     messages = []
     load_protonated(cfg, str(tmp_path / "out"), messages.append)
     assert len(messages) == 1 and messages[0].startswith("WARNING")
+
+
+def ideal_backbone_end():
+    c = np.zeros(3)
+    ca = np.array([1.52, 0.0, 0.0])
+    n = np.array([2.1, 1.3, 0.0])
+    return n, ca, c
+
+
+def test_terminal_oxygens_are_rebuilt_with_ideal_geometry_when_missing():
+    n, ca, c = ideal_backbone_end()
+    o, oxt = terminal_oxygens(n, ca, c, np.array([0.0, 1.54, 0.0]))
+    assert carboxylate_ok(c, ca, o, oxt)
+
+
+def test_good_carbonyl_oxygen_is_kept_and_only_oxt_is_placed():
+    n, ca, c = ideal_backbone_end()
+    good = c + 1.23 * np.array([-0.5, np.sqrt(3) / 2, 0.0])
+    o, oxt = terminal_oxygens(n, ca, c, good)
+    assert np.allclose(o, good) and carboxylate_ok(c, ca, o, oxt)
+
+
+def test_badly_placed_oxt_is_detected():
+    n, ca, c = ideal_backbone_end()
+    o, oxt = terminal_oxygens(n, ca, c, np.array([0.0, 1.54, 0.0]))
+    assert not carboxylate_ok(c, ca, o, c + 1.76 * (oxt - c) / np.linalg.norm(oxt - c))

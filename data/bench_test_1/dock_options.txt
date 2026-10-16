@@ -1,1 +1,1 @@
---solvent water --selection cluster --torsions --protonation all --joint-states --workers 12 --final-top 0 --cluster-expand 0 --n-conformer 300 --n-random 200000 --mutation-rounds 0 --search-radius 12
+--solvent water --selection cluster --torsions --protonation all --joint-states --workers 12 --final-top 0 --cluster-expand 0 --n-conformers 300 --n-random 200000 --mutation-rounds 0 --search-radius 6

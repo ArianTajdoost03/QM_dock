@@ -35,7 +35,7 @@ def test_reader_handles_good_bad_and_odd_entries(tmp_path):
                      ("radical", flat("C[CH2]")),
                      ("huge", flat("C" * 80))])
     with open(path, "a") as handle:
-        handle.write("garbage record\n$$$$\n")
+        handle.write("garbage record\nmore garbage\n\n  not a molfile\n$$$$\n")
     records = read_ligands(path, max_heavy=60)
     by = {r.name: r for r in records}
     assert by["tropolone"].status == "ready" and by["tropolone"].mol.GetNumConformers() == 1

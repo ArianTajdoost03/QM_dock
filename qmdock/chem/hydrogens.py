@@ -13,6 +13,8 @@ NH_LENGTH = 1.01
 XH_LENGTHS = {"C": 1.09, "N": 1.01, "O": 0.96, "S": 1.34}
 XH_SEARCH = 1.4
 HYDROGEN_FORCEFIELD = "amber14-all.xml"
+CARBOXYL_BOND = 1.25
+CARBOXYL_TOLERANCE = 0.2
 
 
 def split_receptor_lines(path):
@@ -96,6 +98,48 @@ def regularize_hydrogens(lines):
     return fixed
 
 
+def carboxylate_ok(c, ca, o, oxt):
+    a = (ca - c) / np.linalg.norm(ca - c)
+    b = (o - c) / np.linalg.norm(o - c)
+    d = (oxt - c) / np.linalg.norm(oxt - c)
+    return (abs(np.linalg.norm(o - c) - CARBOXYL_BOND) < CARBOXYL_TOLERANCE
+            and abs(np.linalg.norm(oxt - c) - CARBOXYL_BOND) < CARBOXYL_TOLERANCE
+            and abs(np.degrees(np.arccos(np.clip(a @ b, -1, 1))) - 118) < 12
+            and abs(np.degrees(np.arccos(np.clip(a @ d, -1, 1))) - 118) < 12
+            and abs(np.degrees(np.arccos(np.clip(b @ d, -1, 1))) - 124) < 12)
+
+
+def terminal_oxygens(n, ca, c, o):
+    a = (ca - c) / np.linalg.norm(ca - c)
+    b = (o - c) / np.linalg.norm(o - c)
+    if abs(np.linalg.norm(o - c) - CARBOXYL_BOND) < CARBOXYL_TOLERANCE and abs(np.degrees(np.arccos(np.clip(a @ b, -1, 1))) - 118) < 12:
+        return o, c - CARBOXYL_BOND * (a + b) / np.linalg.norm(a + b)
+    normal = np.cross(a, n - ca)
+    if np.linalg.norm(normal) < 1e-6:
+        normal = np.cross(a, [1.0, 0.0, 0.0] if abs(a[0]) < 0.9 else [0.0, 1.0, 0.0])
+    p = np.cross(normal / np.linalg.norm(normal), a)
+    return (c + CARBOXYL_BOND * (-0.5 * a + np.sqrt(3) / 2 * p), c + CARBOXYL_BOND * (-0.5 * a - np.sqrt(3) / 2 * p))
+
+
+def repair_terminal_oxygens(fixer):
+    from openmm import Vec3
+    from openmm.unit import Quantity, angstrom, nanometer
+
+    positions = [np.array(p.value_in_unit(angstrom)) for p in fixer.positions]
+    changed = False
+    for residue in fixer.topology.residues():
+        by = {atom.name: atom.index for atom in residue.atoms()}
+        if not all(name in by for name in ("N", "CA", "C", "O", "OXT")):
+            continue
+        n, ca, c, o, oxt = (positions[by[k]] for k in ("N", "CA", "C", "O", "OXT"))
+        if carboxylate_ok(c, ca, o, oxt):
+            continue
+        positions[by["O"]], positions[by["OXT"]] = terminal_oxygens(n, ca, c, o)
+        changed = True
+    if changed:
+        fixer.positions = Quantity([Vec3(*(p / 10.0)) for p in positions], nanometer)
+
+
 def build_fixer(path):
     from pdbfixer import PDBFixer
 
@@ -106,6 +150,7 @@ def build_fixer(path):
     fixer.replaceNonstandardResidues()
     fixer.findMissingAtoms()
     fixer.addMissingAtoms()
+    repair_terminal_oxygens(fixer)
     return fixer
 
 

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 
 from qmdock.chem.receptor import hydrogen_warning, load_receptor
@@ -56,3 +58,44 @@ def test_hydrogen_warning(tmp_path):
     rec_b = load_receptor(str(bare), min_unit_atoms=1, remove_waters=False)
     assert hydrogen_warning(rec_h) is None
     assert hydrogen_warning(rec_b) is not None
+
+
+CA2 = Path(__file__).parent.parent / "data" / "carbonic anhydrase 2" / "1A42.pdb"
+
+
+def residue_index(rec, name, number):
+    return next(i for i, r in enumerate(rec.residues) if r[3] == name and r[1] == str(number))
+
+
+def atom_index(rec, name, number, atom):
+    return next(a for a in rec.residue_atoms[residue_index(rec, name, number)] if rec.names[a] == atom)
+
+
+def test_metal_ligands_are_mapped_to_their_metal():
+    rec = load_receptor(str(CA2), 10, False)
+    zinc = next(i for i, r in enumerate(rec.residues) if r[3] == "ZN")
+    for number in (94, 96, 119):
+        assert zinc in rec.metal_partners[residue_index(rec, "HIS", number)]
+
+
+def test_touching_a_metal_ligand_brings_in_the_whole_metal_site():
+    rec = load_receptor(str(CA2), 10, False)
+    zinc_atom = next(i for i, e in enumerate(rec.elements) if e == "Zn")
+    ring = rec.coords[atom_index(rec, "HIS", 96, "CE1")]
+    away = (ring - rec.coords[zinc_atom]) / np.linalg.norm(ring - rec.coords[zinc_atom])
+    probe = (ring + 3.4 * away)[None]
+    assert np.linalg.norm(probe - rec.coords[zinc_atom]) > 4.5
+    cl = rec.build_cluster(probe, 4.0, 150)
+    members = {rec.residues[int(rec.residue_of_atom[a])][3] + rec.residues[int(rec.residue_of_atom[a])][1] for a in cl.atoms}
+    assert {"ZN262", "HIS94", "HIS96", "HIS119"} <= members
+    assert cl.electrons() % 2 == 0
+
+
+def test_no_cap_hydrogen_is_placed_on_a_metal_and_parity_is_even_everywhere():
+    rec = load_receptor(str(CA2), 10, False)
+    metals = rec.coords[np.isin(rec.elements, ["Zn", "Hg"])]
+    for r in range(len(rec.residues)):
+        cl = rec.build_cluster(rec.coords[rec.residue_atoms[r][0]][None], 4.0, 150)
+        assert cl.electrons() % 2 == 0
+        if len(cl.cap_elements):
+            assert (np.linalg.norm(cl.cap_coords[:, None] - metals[None], axis=2) > 1.6).all()
