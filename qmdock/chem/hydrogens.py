@@ -6,6 +6,7 @@ from scipy.spatial import cKDTree
 from qmdock.chem.elements import METALS, WATER_NAMES
 from qmdock.chem.pdb_io import normalize_element
 from qmdock.chem.receptor import COORDINATION_CUTOFF, hydrogen_warning, load_receptor
+from qmdock.config import PROTONATED_RECEPTOR_FILE
 
 HISTIDINE_HYDROGENS = {"ND1": "HD1", "NE2": "HE2"}
 HISTIDINE_RING = ("CG", "ND1", "CD2", "CE1", "NE2")
@@ -201,7 +202,7 @@ def load_protonated(cfg, out_dir, log):
     receptor = load_receptor(cfg.receptor, cfg.min_unit_atoms, cfg.require_metal, remove_waters=not cfg.keep_waters)
     if hydrogen_warning(receptor) and cfg.add_hydrogens:
         os.makedirs(out_dir, exist_ok=True)
-        path = os.path.join(out_dir, "receptor_h.pdb")
+        path = os.path.join(out_dir, PROTONATED_RECEPTOR_FILE)
         log(f"receptor has {receptor.hydrogen_fraction():.2f} hydrogens per heavy atom: "
             f"adding hydrogens with pdbfixer at pH {cfg.receptor_ph}")
         try:

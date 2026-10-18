@@ -6,6 +6,7 @@ import pandas as pd
 from rdkit import Chem
 
 from qmdock.chem.elements import METALS
+from qmdock.config import BEST_COMPLEX_FILE, CLUSTERS_FILE, POSES_FILE, RESULTS_FILE, SUMMARY_FILE
 from qmdock.chem.pdb_io import write_xyz
 from qmdock.qm.pool import log
 from qmdock.search.clustering import sym_rmsd
@@ -54,7 +55,7 @@ def write_cluster_table(out, sel, res):
                       "best_fast_score": float(sel.poses.score[g["best"]]), "medoid_pose": g["medoid"],
                       "best_pose": g["best"], "best_qm_e_bind": min(vals) if vals else np.nan,
                       "expanded": i in res.expanded})
-    pd.DataFrame(table).to_csv(os.path.join(out, "clusters.csv"), index=False)
+    pd.DataFrame(table).to_csv(os.path.join(out, CLUSTERS_FILE), index=False)
 
 
 def export_dft(cfg, out, lig, res, ranked, final_coords, best):
@@ -96,9 +97,9 @@ def write_results(cfg, out, lig, sel, res, timings, warnings, receptor=None):
     top = int(ranked.iloc[0].pose)
     ranked["rmsd_to_top"] = [sym_rmsd(final_coords[int(p)][lig.heavy], final_coords[top][lig.heavy], lig.perms)
                              for p in ranked.pose]
-    ranked.to_csv(os.path.join(out, "results.csv"), index=False)
+    ranked.to_csv(os.path.join(out, RESULTS_FILE), index=False)
 
-    writer = Chem.SDWriter(os.path.join(out, "poses.sdf"))
+    writer = Chem.SDWriter(os.path.join(out, POSES_FILE))
     for _, row in ranked[ranked.status == "ok"].iterrows():
         m = Chem.Mol(lig.mol)
         m.RemoveAllConformers()
@@ -114,7 +115,7 @@ def write_results(cfg, out, lig, sel, res, timings, warnings, receptor=None):
 
     best = ranked.iloc[0]
     best_cl = (res.stage3.get(top) if res.stage3.get(top, {}).get("status") == "ok" else res.stage1[top])["cluster"]
-    write_xyz(os.path.join(out, "best_complex.xyz"), best_cl.elements() + lig.elements,
+    write_xyz(os.path.join(out, BEST_COMPLEX_FILE), best_cl.elements() + lig.elements,
               np.vstack([best_cl.coords(), final_coords[top]]), f"best pose {top} e_final {best.e_final:.2f} kcal/mol")
     if cfg.export_dft:
         export_dft(cfg, out, lig, res, ranked, final_coords, best)
@@ -131,7 +132,7 @@ def write_results(cfg, out, lig, sel, res, timings, warnings, receptor=None):
                "solvent": cfg.solvent, "selection": cfg.selection,
                "n_clusters": len(sel.groups) if sel.groups else None, "n_poses_evaluated": len(res.stage1),
                "n_transfer_rejected": len(sel.rejected), **site}
-    with open(os.path.join(out, "summary.json"), "w") as f:
+    with open(os.path.join(out, SUMMARY_FILE), "w") as f:
         json.dump(summary, f, indent=2)
     log(f"best pose {top}: {best.e_final:.2f} kcal/mol (level {int(best.level)}), gap to next family {gap}")
     log("timings: " + ", ".join(f"{k} {v:.0f}s" for k, v in timings.items()))

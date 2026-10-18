@@ -7,16 +7,17 @@ import re
 import pandas as pd
 
 from bench_common import find_complexes, load_table, read_ids, read_json
+from qmdock.config import POSES_FILE, STATE_PREFIX
 from rmsd import best_rmsd, load_mols
 
 TOP_N = (3, 5, 10)
 
 
 def state_dirs(run_dir):
-    if os.path.exists(os.path.join(run_dir, "poses.sdf")):
+    if os.path.exists(os.path.join(run_dir, POSES_FILE)):
         return [run_dir]
-    found = [d for d in glob.glob(os.path.join(run_dir, "state_*")) if os.path.exists(os.path.join(d, "poses.sdf"))]
-    return sorted(found, key=lambda d: int(re.search(r"state_(\d+)$", d).group(1)))
+    found = [d for d in glob.glob(os.path.join(run_dir, STATE_PREFIX + "*")) if os.path.exists(os.path.join(d, POSES_FILE))]
+    return sorted(found, key=lambda d: int(re.search(re.escape(STATE_PREFIX) + r"(\d+)$", d).group(1)))
 
 
 def energy_of(mol):
@@ -28,7 +29,7 @@ def energy_of(mol):
 
 def score_state(ref, state_dir):
     rows = []
-    for rank, mol in enumerate(load_mols(os.path.join(state_dir, "poses.sdf")), 1):
+    for rank, mol in enumerate(load_mols(os.path.join(state_dir, POSES_FILE)), 1):
         try:
             value = best_rmsd(ref, mol)[0]
         except ValueError:
@@ -65,7 +66,7 @@ def evaluate(cid, run_dir, crystal_fallback, reference, select):
     ref = load_mols(crystal)[0]
     per_state = []
     for state_dir in states:
-        name = os.path.basename(state_dir) if state_dir != run_dir else "state_0"
+        name = os.path.basename(state_dir) if state_dir != run_dir else STATE_PREFIX + "0"
         poses = score_state(ref, state_dir)
         per_state.append((name, poses))
         for p in poses:

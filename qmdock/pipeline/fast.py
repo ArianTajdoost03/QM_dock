@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from qmdock.chem.receptor import find_surface_sites
+from qmdock.config import POOL_FILE
 from qmdock.pipeline.ligandprep import prepare_conformers
 from qmdock.qm.pool import log
 from qmdock.search.clustering import cluster_poses, pairwise_rmsd, representatives
@@ -107,7 +108,7 @@ def load_cache(path):
 
 
 def get_pool(cfg, receptor, lig, runner, warnings, timings):
-    path = os.path.join(cfg.out, "fast_stage.npz")
+    path = os.path.join(cfg.out, POOL_FILE)
     centers = centers_for(cfg, receptor, lig)
     if cfg.reuse_fast and os.path.exists(path):
         coords, conf_e, poses = load_cache(path)

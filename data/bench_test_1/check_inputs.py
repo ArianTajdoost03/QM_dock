@@ -1,78 +1,31 @@
 import argparse
 import csv
 import os
-import sys
 
-from rdkit import Chem
-
-from bench_common import find_complexes, read_crystal_ligand, read_ids
+from bench_common import find_complexes, read_ids
+from qmdock.chem.elements import METALS
+from qmdock.chem.receptor import hydrogen_warning, load_receptor
 from run_benchmark import fresh_ligand
 
-SUPPORTED = {"H", "Li", "B", "C", "N", "O", "F", "Na", "Mg", "Si", "P", "S", "Cl", "K", "Ca", "Mn", "Fe",
-             "Co", "Ni", "Cu", "Zn", "Se", "Br", "Ag", "Cd", "I", "Hg"}
-FIELDS = ["id", "status", "problems", "ligand_heavy", "ligand_repaired_nh", "aromatic_atoms_lost",
-          "receptor_atoms", "receptor_h_per_heavy", "receptor_unsupported", "metals"]
+FIELDS = ["id", "status", "problems", "ligand_heavy", "receptor_atoms", "receptor_h_per_heavy", "metals"]
 
 
-def element_of(line):
-    symbol = line[76:78].strip()
-    if not symbol:
-        symbol = "".join(c for c in line[12:16].strip() if c.isalpha())[:2]
-    return symbol.capitalize()
-
-
-def scan_receptor(path):
-    counts = {}
-    with open(path) as fh:
-        for line in fh:
-            if line.startswith(("ATOM", "HETATM")):
-                symbol = element_of(line)
-                symbol = "H" if symbol == "D" else symbol
-                counts[symbol] = counts.get(symbol, 0) + 1
-    hydrogens = counts.get("H", 0)
-    heavy = sum(v for k, v in counts.items() if k != "H")
-    unsupported = sorted(k for k in counts if k not in SUPPORTED)
-    metals = sorted(k for k in counts if k in ("Fe", "Zn", "Mn", "Cu", "Mg", "Ca", "Ni", "Co", "Cd", "Ag", "Hg"))
-    return heavy + hydrogens, hydrogens / max(1, heavy), unsupported, metals
-
-
-def aromatic_atoms(mol):
-    return sum(1 for a in mol.GetAtoms()
-               if a.GetIsAromatic() or any(b.GetBondType() == Chem.BondType.AROMATIC for b in a.GetBonds()))
-
-
-def check_complex(cid, protein, ligand, min_hydrogens, seed):
+def check_complex(cid, protein, ligand, require_hydrogens, seed):
     row = {k: "" for k in FIELDS}
     row["id"] = cid
     problems, failed = [], False
     try:
-        atoms, ratio, unsupported, metals = scan_receptor(protein)
-        row.update(receptor_atoms=atoms, receptor_h_per_heavy=round(ratio, 3),
-                   receptor_unsupported=" ".join(unsupported), metals=" ".join(metals))
-        if ratio < min_hydrogens:
+        receptor = load_receptor(protein)
+        row.update(receptor_atoms=len(receptor.elements), receptor_h_per_heavy=round(receptor.hydrogen_fraction(), 3),
+                   metals=" ".join(sorted({e for e in receptor.elements if e in METALS})))
+        if require_hydrogens and hydrogen_warning(receptor):
             problems.append("receptor_without_hydrogens")
-        if unsupported:
-            problems.append("receptor_unsupported_element")
-            failed = True
     except Exception as exc:
-        problems.append("receptor_unreadable:%s" % exc)
+        problems.append("receptor_failed:%s" % exc)
         failed = True
     try:
-        mol, repaired = read_crystal_ligand(ligand)
-        raw = Chem.MolFromMolFile(ligand, removeHs=False, sanitize=False)
-        lost = aromatic_atoms(raw) - aromatic_atoms(mol) if raw is not None else 0
-        row.update(ligand_heavy=sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() > 1),
-                   ligand_repaired_nh=repaired, aromatic_atoms_lost=max(0, lost))
-        if repaired:
-            problems.append("ligand_repaired_aromatic_nh")
-        if lost > 0:
-            problems.append("ligand_aromaticity_lost_on_read")
-        bad = sorted({a.GetSymbol() for a in mol.GetAtoms() if a.GetSymbol() not in SUPPORTED})
-        if bad:
-            problems.append("ligand_unsupported_element:" + "".join(bad))
-            failed = True
-        else:
-            fresh_ligand(ligand, cid, seed)
+        fresh, _, info = fresh_ligand(ligand, cid, seed)
+        row["ligand_heavy"] = info["n_heavy"]
     except Exception as exc:
         problems.append("ligand_failed:%s" % exc)
         failed = True
@@ -82,12 +35,12 @@ def check_complex(cid, protein, ligand, min_hydrogens, seed):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Check receptors and ligands before docking")
+    parser = argparse.ArgumentParser(description="Check receptors and ligands with qmdock's own loaders before docking")
     parser.add_argument("--data", required=True)
     parser.add_argument("--ids")
     parser.add_argument("--out", default=".")
-    parser.add_argument("--min-hydrogens", type=float, default=0.3)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--require-hydrogens", action="store_true")
+    parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
 
     found = find_complexes(args.data)
@@ -99,7 +52,7 @@ def main():
             row = {k: "" for k in FIELDS}
             row.update(id=cid, status="fail", problems="files_not_found")
         else:
-            row = check_complex(cid, *found[cid], args.min_hydrogens, args.seed)
+            row = check_complex(cid, *found[cid], args.require_hydrogens, args.seed)
         rows.append(row)
         if row["status"] != "ok":
             print("[%d/%d] %s %s %s" % (n, len(ids), cid, row["status"], row["problems"]), flush=True)
@@ -110,8 +63,13 @@ def main():
         writer.writerows(rows)
     tally = {s: sum(1 for r in rows if r["status"] == s) for s in ("ok", "warn", "fail")}
     print("checked %d complexes: %d ok, %d warn, %d fail -> %s" % (len(rows), tally["ok"], tally["warn"], tally["fail"], path))
-    if tally["warn"] or tally["fail"]:
-        print("re-run split_complexes.py to regenerate ligands flagged as repaired or aromaticity_lost", file=sys.stderr)
+    bare = sum(1 for r in rows if r["receptor_h_per_heavy"] != "" and r["receptor_h_per_heavy"] < 0.3)
+    if bare:
+        try:
+            import openmm
+            import pdbfixer
+        except ImportError:
+            print("%d receptors have no hydrogens and pdbfixer/openmm are not installed, so qmdock cannot add them" % bare)
 
 
 if __name__ == "__main__":

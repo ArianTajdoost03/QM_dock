@@ -6,6 +6,8 @@ import pandas as pd
 
 from bench_common import find_complexes, read_ids, read_json
 from collect_rmsd import state_dirs
+from qmdock.config import POOL_FILE, POSES_FILE, RESULTS_FILE, STATE_PREFIX
+from qmdock.pipeline.fast import load_cache
 from rmsd import load_mols, skeleton
 
 
@@ -26,10 +28,10 @@ def pool_rmsds(ref, mol, coords, max_matches=2000):
 
 
 def pool_groups(run_dir):
-    shared = os.path.join(run_dir, "fast_stage.npz")
+    shared = os.path.join(run_dir, POOL_FILE)
     groups = {}
     for state in state_dirs(run_dir):
-        own = os.path.join(state, "fast_stage.npz")
+        own = os.path.join(state, POOL_FILE)
         path = own if os.path.exists(own) else shared
         if os.path.exists(path):
             groups.setdefault(path, []).append(state)
@@ -38,7 +40,7 @@ def pool_groups(run_dir):
 
 def reference_for(path, states, n_atoms):
     for state in states:
-        mols = load_mols(os.path.join(state, "poses.sdf"))
+        mols = load_mols(os.path.join(state, POSES_FILE))
         if mols[0].GetNumAtoms() == n_atoms:
             return mols[0]
     return None
@@ -60,8 +62,8 @@ def attribute(cid, run_dir, crystal, threshold):
     ref = load_mols(path_ref)[0]
     best = None
     for path, states in groups.items():
-        z = np.load(path)
-        coords, score = z["pool_coords"], z["pool_score"]
+        poses = load_cache(path)[2]
+        coords, score = poses.coords, poses.score
         mol = reference_for(path, states, coords.shape[1])
         if mol is None:
             continue
@@ -74,10 +76,10 @@ def attribute(cid, run_dir, crystal, threshold):
                  "best_native_fast_rank": int(fast_rank[native].min()) if native.any() else None}
         tables = []
         for state in states:
-            results = os.path.join(state, "results.csv")
+            results = os.path.join(state, RESULTS_FILE)
             if os.path.exists(results):
                 table = pd.read_csv(results)
-                table["state"] = os.path.basename(state) if state != run_dir else "state_0"
+                table["state"] = os.path.basename(state) if state != run_dir else STATE_PREFIX + "0"
                 tables.append(table)
         table = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
         entry["pool_rmsd"] = rmsd

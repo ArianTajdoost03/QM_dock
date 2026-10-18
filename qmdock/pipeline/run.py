@@ -5,9 +5,10 @@ from dataclasses import asdict, replace
 
 import pandas as pd
 
+from qmdock.chem.hydrogens import load_protonated
 from qmdock.chem.ligand import load_ligand
 from qmdock.chem.protonation import ligand_states
-from qmdock.chem.hydrogens import load_protonated
+from qmdock.config import CONFIG_FILE, STATE_PREFIX, STATES_FILE, SUMMARY_FILE
 from qmdock.pipeline.estimate import report_dry_run
 from qmdock.pipeline.fast import get_pool, select_poses
 from qmdock.pipeline.joint import transfer_selection
@@ -36,7 +37,7 @@ def state_row(i, st, sub):
 
 
 def add_summary(row, out):
-    with open(os.path.join(out, "summary.json")) as f:
+    with open(os.path.join(out, SUMMARY_FILE)) as f:
         summary = json.load(f)
     row.update(best_pose=summary["best_pose"], best_e_final_kcal=summary["best_e_final_kcal"],
                best_level=summary["best_level"], gap_to_next_family_kcal=summary["gap_to_next_family_kcal"],
@@ -46,7 +47,7 @@ def add_summary(row, out):
 def run_sequential(cfg, states, receptor, runner, session):
     rows = []
     for i, st in enumerate(states):
-        sub = replace(cfg, out=os.path.join(cfg.out, f"state_{i}"), ligand_charge=None)
+        sub = replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"), ligand_charge=None)
         row = state_row(i, st, sub)
         log(f"=== protonation state {i}/{len(states) - 1}: {st['smiles']} ===")
         try:
@@ -72,10 +73,10 @@ def run_joint(cfg, states, receptor, runner, session):
     sel_t = select_poses(base_cfg, receptor, lig_t, pool)
     if cfg.dry_run:
         report_dry_run(base_cfg, receptor, sel_t, lig_t, runner.workers)
-        return [state_row(i, st, replace(cfg, out=os.path.join(cfg.out, f"state_{i}"))) for i, st in enumerate(states)]
+        return [state_row(i, st, replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"))) for i, st in enumerate(states)]
     rows = []
     for i, st in enumerate(states):
-        sub = replace(cfg, out=os.path.join(cfg.out, f"state_{i}"), ligand_charge=None)
+        sub = replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"), ligand_charge=None)
         row = state_row(i, st, sub)
         log(f"=== protonation state {i}/{len(states) - 1}: {st['smiles']} ===")
         try:
@@ -110,7 +111,7 @@ def dock_molecule(cfg, base, receptor, runner, session):
 
 def run(cfg):
     os.makedirs(cfg.out, exist_ok=True)
-    with open(os.path.join(cfg.out, "config.json"), "w") as f:
+    with open(os.path.join(cfg.out, CONFIG_FILE), "w") as f:
         json.dump(asdict(cfg), f, indent=2)
     preflight(cfg.solvent, cfg.solvation_model)
     base = load_ligand(cfg.ligand)
@@ -134,7 +135,7 @@ def run(cfg):
         joint = cfg.joint_states
         rows = (run_joint if joint else run_sequential)(cfg, states, receptor, runner, session)
     table = pd.DataFrame(rows)
-    table.to_csv(os.path.join(cfg.out, "states.csv"), index=False)
+    table.to_csv(os.path.join(cfg.out, STATES_FILE), index=False)
     log("energies of different protonation states are not comparable (different numbers of protons); "
         "rank poses within a state and compare states by geometry or with pKa corrections")
     return table

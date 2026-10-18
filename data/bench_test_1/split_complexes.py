@@ -2,7 +2,6 @@ import argparse
 import csv
 import glob
 import os
-import re
 import urllib.request
 from collections import Counter
 from functools import partial
@@ -11,9 +10,13 @@ from multiprocessing import Pool
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem
+from scipy.spatial import cKDTree
 
-WATER = {"HOH", "WAT", "DOD", "H2O"}
-METALS = {"ZN", "MG", "MN", "CA", "FE", "FE2", "CO", "NI", "CU", "CU1", "CD"}
+from bench_common import write_json
+from qmdock.chem.elements import METALS, WATER_NAMES
+from qmdock.chem.hydrogens import protonate_receptor
+from qmdock.chem.pdb_io import normalize_element
+
 EXCLUDE = {
     "SO4", "PO4", "GOL", "EDO", "PEG", "PGE", "PG4", "P6G", "1PE", "MPD", "DMS",
     "ACT", "ACY", "FMT", "TRS", "EPE", "MES", "BME", "NO3", "CIT", "TAR", "FLC",
@@ -45,9 +48,7 @@ def parse(path):
             if raw[16] not in (" ", "A"):
                 continue
             name = raw[12:16].strip()
-            element = raw[76:78].strip().upper() if len(raw.rstrip("\r\n")) >= 78 else ""
-            if not element:
-                element = re.sub(r"[^A-Za-z]", "", name)[:1].upper()
+            element = normalize_element(raw[76:78], name)
             line = raw[:16] + " " + raw[17:]
             atoms.append({
                 "record": rec.strip(),
@@ -69,11 +70,11 @@ def classify(atoms, modres):
         if a["element"] in ("H", "D"):
             continue
         rn = a["resname"]
-        if rn in WATER:
+        if rn in WATER_NAMES:
             continue
         if a["record"] == "ATOM":
             protein.append(a)
-        elif rn in METALS:
+        elif a["element"] in METALS:
             metals.append(a)
         elif rn in modres:
             protein.append(a)
@@ -82,12 +83,8 @@ def classify(atoms, modres):
     return protein, metals, others
 
 
-def min_dist(points, ref, chunk=4000):
-    out = np.empty(len(points))
-    for i in range(0, len(points), chunk):
-        block = points[i:i + chunk]
-        out[i:i + chunk] = np.linalg.norm(block[:, None, :] - ref[None, :, :], axis=2).min(axis=1)
-    return out
+def min_dist(points, ref):
+    return cKDTree(ref).query(points)[0]
 
 
 def pick_ligand(others, metals, min_heavy):
@@ -125,30 +122,11 @@ def select_chains(protein, lig_xyz, contact):
 
 
 def write_protein(lines, path, hydrogens, ph):
-    tmp = path + ".tmp.pdb"
-    with open(tmp, "w") as fh:
+    with open(path, "w") as fh:
         fh.writelines(lines)
         fh.write("END\n")
-    if not hydrogens:
-        os.replace(tmp, path)
-        return
-    try:
-        from openmm.app import PDBFile
-        from pdbfixer import PDBFixer
-
-        fixer = PDBFixer(filename=tmp)
-        fixer.findMissingResidues()
-        fixer.missingResidues = {}
-        fixer.findNonstandardResidues()
-        fixer.replaceNonstandardResidues()
-        fixer.findMissingAtoms()
-        fixer.addMissingAtoms()
-        fixer.addMissingHydrogens(ph)
-        with open(path, "w") as fh:
-            PDBFile.writeFile(fixer.topology, fixer.positions, fh, keepIds=True)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    if hydrogens:
+        protonate_receptor(path, path, ph)
 
 
 def load_template(code, cache_dir):
@@ -282,6 +260,7 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
+    write_json(os.path.join(args.output, "split_options.json"), vars(args))
     cache_dir = os.path.join(args.output, "_ccd_templates")
     os.makedirs(cache_dir, exist_ok=True)
     files = sorted(glob.glob(os.path.join(args.input, "*.pdb")))

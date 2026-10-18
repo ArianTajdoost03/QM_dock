@@ -17,7 +17,7 @@ def call(script, *items):
 def main():
     parser = argparse.ArgumentParser(description="Dock all complexes, compute RMSDs and run the analysis in one go")
     parser.add_argument("--data", required=True)
-    parser.add_argument("--qmdock", required=True)
+    parser.add_argument("--qmdock")
     parser.add_argument("--out", default="runs/base")
     parser.add_argument("--options", default=os.path.join(HERE, "dock_options.txt"))
     parser.add_argument("--opts")
@@ -36,8 +36,10 @@ def main():
     if not args.skip_docking and not args.skip_preflight:
         call("check_inputs.py", "--data", args.data, "--ids", args.ids, "--out", out)
     if not args.skip_docking:
-        dock = ["--data", args.data, "--qmdock", args.qmdock, "--out", out, "--ids", args.ids,
+        dock = ["--data", args.data, "--out", out, "--ids", args.ids,
                 "--jobs", str(args.jobs), "--timeout", str(args.timeout), "--limit", str(args.limit)]
+        if args.qmdock:
+            dock += ["--qmdock", args.qmdock]
         dock += ["--opts=" + args.opts] if args.opts else ["--options", args.options]
         if args.force:
             dock.append("--force")
@@ -47,6 +49,7 @@ def main():
     if args.baselines:
         analyze += ["--baselines", args.baselines]
     call("analyze_benchmark.py", *analyze)
+    call("attribute_failures.py", "--runs", out, "--data", args.data, "--ids", args.ids)
 
 
 if __name__ == "__main__":

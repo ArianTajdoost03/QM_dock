@@ -7,41 +7,35 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdMolDescriptors
+from rdkit.Chem import rdMolDescriptors
 
-from bench_common import (find_complexes, load_table, read_crystal_ligand, read_ids, read_json, read_options,
-                          write_json)
+from bench_common import REPO, find_complexes, load_table, read_ids, read_json, read_options, write_json
+from qmdock.chem.ligand import load_ligand
+from qmdock.config import OUTPUT_FILES, STATE_PREFIX
+from qmdock.screening.ligands import prepare_molecule
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+RUN_INFO_FILE = "run_info.json"
 
 
 def fresh_ligand(crystal_path, name, seed):
-    mol, repaired = read_crystal_ligand(crystal_path)
-    conf = mol.GetConformer()
-    xyz = np.array([list(conf.GetAtomPosition(a.GetIdx())) for a in mol.GetAtoms() if a.GetAtomicNum() > 1])
-    heavy = Chem.RemoveHs(mol)
+    crystal = load_ligand(crystal_path)
+    heavy_index = [a.GetIdx() for a in crystal.GetAtoms() if a.GetAtomicNum() > 1]
+    xyz = crystal.GetConformer().GetPositions()[heavy_index]
+    heavy = Chem.RemoveHs(crystal)
     Chem.AssignStereochemistryFrom3D(heavy)
     smiles = Chem.MolToSmiles(heavy)
     built = Chem.MolFromSmiles(smiles)
     if built is None:
         raise ValueError("SMILES could not be rebuilt: %s" % smiles)
-    fresh = Chem.AddHs(built)
-    params = AllChem.ETKDGv3()
-    params.randomSeed = seed
-    params.useRandomCoords = True
-    if AllChem.EmbedMolecule(fresh, params) < 0:
-        raise ValueError("3D embedding failed")
-    if AllChem.MMFFHasAllMoleculeParams(fresh):
-        AllChem.MMFFOptimizeMolecule(fresh, maxIters=2000)
+    fresh, _ = prepare_molecule(built, seed)
     fresh.SetProp("_Name", name)
     info = {
         "smiles": smiles,
         "n_heavy": heavy.GetNumAtoms(),
         "n_rot": int(rdMolDescriptors.CalcNumRotatableBonds(heavy)),
         "charge": int(Chem.GetFormalCharge(heavy)),
-        "repaired_aromatic_nh": repaired,
     }
     return fresh, xyz.mean(axis=0), info
 
@@ -49,9 +43,9 @@ def fresh_ligand(crystal_path, name, seed):
 def clean_run_dir(run_dir):
     for name in os.listdir(run_dir):
         path = os.path.join(run_dir, name)
-        if os.path.isdir(path) and name.startswith("state_"):
+        if os.path.isdir(path) and name.startswith(STATE_PREFIX):
             shutil.rmtree(path)
-        elif name in ("poses.sdf", "results.csv", "summary.json", "states.csv", "best_complex.xyz", "clusters.csv", "run_info.json"):
+        elif name in OUTPUT_FILES + (RUN_INFO_FILE,):
             os.remove(path)
 
 
@@ -59,7 +53,7 @@ def dock_one(task):
     cid, receptor, ligand, args, tokens = task
     run_dir = os.path.join(args.out, cid)
     os.makedirs(run_dir, exist_ok=True)
-    info_path = os.path.join(run_dir, "run_info.json")
+    info_path = os.path.join(run_dir, RUN_INFO_FILE)
     previous = read_json(info_path)
     if not args.force and previous and previous.get("returncode") == 0:
         return cid, "skipped_done", float(previous.get("seconds", 0.0))
@@ -103,7 +97,7 @@ def dock_one(task):
 def main():
     parser = argparse.ArgumentParser(description="Redock every complex with qmdock")
     parser.add_argument("--data", required=True)
-    parser.add_argument("--qmdock", required=True)
+    parser.add_argument("--qmdock", default=REPO)
     parser.add_argument("--out", default="runs/default")
     parser.add_argument("--options", default=os.path.join(HERE, "dock_options.txt"))
     parser.add_argument("--opts")
@@ -121,7 +115,10 @@ def main():
     args.data = os.path.abspath(args.data)
     args.qmdock = os.path.abspath(args.qmdock)
     args.out = os.path.abspath(args.out)
-    tokens = read_options(path=None if args.opts else args.options, text=args.opts)
+    try:
+        tokens = read_options(path=None if args.opts else args.options, text=args.opts)
+    except ValueError as exc:
+        sys.exit(str(exc))
 
     complexes = find_complexes(args.data)
     if args.ids:

@@ -3,6 +3,8 @@ import os
 import pandas as pd
 from rdkit import Chem
 
+from qmdock.config import POSES_FILE
+
 COLUMNS = ["rank", "name", "index", "status", "e_final_kcal", "e_per_heavy_atom", "level", "best_state",
            "best_state_smiles", "charge", "gap_to_next_family_kcal", "n_states", "n_states_ok", "heavy_atoms",
            "input_smiles", "seconds", "notes", "error", "dir"]
@@ -27,7 +29,7 @@ def ligand_result(rec, rows, seconds, ldir):
         return result
     result.update(status="ok", e_final_kcal=best["best_e_final_kcal"], level=best["best_level"],
                   best_state=best["state"], best_state_smiles=best["smiles"], charge=best["charge"],
-                  gap_to_next_family_kcal=best.get("gap_to_next_family_kcal"), pose_file=os.path.join(best["dir"], "poses.sdf"),
+                  gap_to_next_family_kcal=best.get("gap_to_next_family_kcal"), pose_file=os.path.join(best["dir"], POSES_FILE),
                   e_per_heavy_atom=(best["best_e_final_kcal"] / rec.heavy_atoms if rec.heavy_atoms else None))
     return result
 

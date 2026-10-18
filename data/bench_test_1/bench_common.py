@@ -1,10 +1,16 @@
+import contextlib
 import csv
-import itertools
+import io
 import json
 import os
 import shlex
+import sys
 
-from rdkit import Chem
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+
+from qmdock.cli import build_parser
 
 RESERVED_OPTIONS = ("--receptor", "--ligand", "--center", "--out")
 
@@ -20,6 +26,13 @@ def read_options(path=None, text=None):
     clash = [t for t in tokens if t in RESERVED_OPTIONS]
     if clash:
         raise ValueError("these options are set by the runner and must not appear in the options: %s" % ", ".join(clash))
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(captured):
+            build_parser("dock.py").parse_args(
+                ["--receptor", "r.pdb", "--ligand", "l.sdf", "--center", "0", "0", "0", "--out", "o", *tokens])
+    except SystemExit:
+        raise ValueError("qmdock does not accept these options (%s)" % captured.getvalue().strip().splitlines()[-1]) from None
     return tokens
 
 
@@ -58,30 +71,3 @@ def read_json(path):
 def write_json(path, data):
     with open(path, "w") as fh:
         json.dump(data, fh, indent=2)
-
-
-def read_crystal_ligand(path):
-    mol = Chem.MolFromMolFile(path, removeHs=False, sanitize=True)
-    if mol is not None:
-        return mol, 0
-    raw = Chem.MolFromMolFile(path, removeHs=False, sanitize=False)
-    if raw is None:
-        raise ValueError("crystal ligand cannot be parsed")
-    raw.UpdatePropertyCache(strict=False)
-    candidates = [a.GetIdx() for a in raw.GetAtoms()
-                  if a.GetSymbol() == "N" and a.GetDegree() == 2 and a.GetFormalCharge() == 0
-                  and a.GetTotalNumHs() == 0
-                  and (a.GetIsAromatic() or any(b.GetBondType() == Chem.BondType.AROMATIC for b in a.GetBonds()))]
-    for size in range(1, min(len(candidates), 3) + 1):
-        for combo in itertools.combinations(candidates, size):
-            trial = Chem.RWMol(raw)
-            for idx in combo:
-                atom = trial.GetAtomWithIdx(idx)
-                atom.SetNumExplicitHs(1)
-                atom.SetNoImplicit(True)
-            try:
-                Chem.SanitizeMol(trial)
-            except Exception:
-                continue
-            return trial.GetMol(), size
-    raise ValueError("crystal ligand cannot be sanitized")

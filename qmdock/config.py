@@ -1,5 +1,18 @@
 from dataclasses import dataclass, field
 
+POSES_FILE = "poses.sdf"
+RESULTS_FILE = "results.csv"
+SUMMARY_FILE = "summary.json"
+CLUSTERS_FILE = "clusters.csv"
+STATES_FILE = "states.csv"
+BEST_COMPLEX_FILE = "best_complex.xyz"
+CONFIG_FILE = "config.json"
+POOL_FILE = "fast_stage.npz"
+PROTONATED_RECEPTOR_FILE = "receptor_h.pdb"
+STATE_PREFIX = "state_"
+OUTPUT_FILES = (POSES_FILE, RESULTS_FILE, SUMMARY_FILE, CLUSTERS_FILE, STATES_FILE, BEST_COMPLEX_FILE, CONFIG_FILE,
+                PROTONATED_RECEPTOR_FILE)
+
 HARTREE_TO_KCAL = 627.509474
 BOHR_TO_ANG = 0.529177210903
 
