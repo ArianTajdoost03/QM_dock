@@ -143,7 +143,7 @@ def select_poses(cfg, receptor, lig, pool):
         poses = pool_poses.take(origin)
         first = list(range(len(poses)))
     usable = sum(1 for p in first
-                 if receptor.build_cluster(poses.coords[p], cfg.shell, cfg.max_cluster_atoms) is not None)
+                 if receptor.build_cluster(poses.coords[p], cfg.shell, cfg.cluster_cap, cfg.charged_shell) is not None)
     if usable == 0:
         raise RuntimeError("no eligible receptor unit or residue lies within the shell of any pose")
     log(f"selected {len(first)} poses for QM")

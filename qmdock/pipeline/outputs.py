@@ -24,7 +24,8 @@ def pose_table(sel, res):
             row["cluster"] = res.cluster_of.get(p)
         if sel.origin is not None:
             row["pool_index"] = int(sel.origin[p])
-        for k in ("n_atoms", "skipped_units", "truncated_units", "scf_attempt", "e_int", "strain", "e_bind"):
+        for k in ("n_atoms", "n_residues", "cluster_charge", "pocket_id", "pocket_poses", "skipped_units",
+                  "truncated_units", "scf_attempt", "e_int", "strain", "e_bind"):
             if k in s1:
                 row[k] = s1[k]
         if p in res.relaxed:

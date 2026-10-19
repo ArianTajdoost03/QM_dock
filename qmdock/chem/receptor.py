@@ -142,7 +142,7 @@ class Receptor:
                         pending.append(q)
         return site
 
-    def build_cluster(self, lig_coords, shell, max_atoms=None):
+    def build_cluster(self, lig_coords, shell, max_atoms=None, charged_shell=0.0):
         hits = self.tree.query_ball_point(lig_coords, shell)
         ids = np.unique(np.concatenate([np.asarray(h, dtype=int) for h in hits]))
         if ids.size == 0:
@@ -156,6 +156,20 @@ class Receptor:
                 res[r] = min(res.get(r, 1e9), float(d))
             else:
                 units[u] = min(units.get(u, 1e9), float(d))
+        if charged_shell > shell:
+            far = np.unique(np.concatenate([np.asarray(h, dtype=int)
+                                            for h in self.tree.query_ball_point(lig_coords, charged_shell)]))
+            far_dist = cKDTree(lig_coords).query(self.coords[far])[0]
+            charged, extra = {}, {}
+            for a, d in zip(far, far_dist):
+                r = int(self.residue_of_atom[a])
+                if not self.polymer[self.unit_of_atom[a]] or r in res:
+                    continue
+                if r not in charged:
+                    charged[r] = self.residue_charge(r) != 0
+                if charged[r]:
+                    extra[r] = min(extra.get(r, 1e9), float(d))
+            res.update(extra)
         skipped = sum(1 for u in units if not self.eligible[u] and self.reasons[u] != "fragment")
         units = {u: d for u, d in units.items() if self.eligible[u]}
 
@@ -165,11 +179,11 @@ class Receptor:
         cands = sorted([(d, "u", u) for u, d in units.items()] + [(d, "r", r) for r, d in res.items()
                                                                   if r not in chosen_res])
         truncated = 0
-        for d, kind, i in cands:
+        for k, (d, kind, i) in enumerate(cands):
             size = len(self.unit_atoms[i]) if kind == "u" else len(self.residue_atoms[i]) + 2
             if max_atoms is not None and (chosen_res or chosen_units) and total + size > max_atoms:
-                truncated += 1
-                continue
+                truncated = len(cands) - k
+                break
             total += size
             if kind == "u":
                 chosen_units.append(i)

@@ -15,6 +15,7 @@ OUTPUT_FILES = (POSES_FILE, RESULTS_FILE, SUMMARY_FILE, CLUSTERS_FILE, STATES_FI
 
 HARTREE_TO_KCAL = 627.509474
 BOHR_TO_ANG = 0.529177210903
+COST_EXPONENT = 2.8
 
 
 @dataclass
@@ -39,9 +40,11 @@ class Config:
     diversity_rmsd: float = 2.0
     n_qm: int = 30
     shell: float = 4.0
-    max_cluster_atoms: int = 150
+    charged_shell: float = 6.0
+    share_pockets: bool = True
+    max_cluster_atoms: int = 0
     final_top: int = 3
-    final_max_atoms: int = 300
+    final_max_atoms: int = 0
     min_unit_atoms: int = 10
     require_metal: bool = False
     keep_waters: bool = False
@@ -88,3 +91,11 @@ class Config:
     device: str = "auto"
     seed: int = 7
     pair_budget: float = 6e7
+
+    @property
+    def cluster_cap(self):
+        return self.max_cluster_atoms or None
+
+    @property
+    def final_cap(self):
+        return self.final_max_atoms or None

@@ -2,16 +2,19 @@ import time
 
 import numpy as np
 
+from qmdock.config import COST_EXPONENT
 from qmdock.qm.jobs import energy_job, numbers_of
 from qmdock.qm.engine import run_job
+from qmdock.pipeline.qmstages import assign_pockets
 from qmdock.qm.pool import log
 
 
 def report_dry_run(cfg, receptor, sel, lig, workers):
     poses, pids, n_lig = sel.poses, sel.first, lig.n_atoms
     pockets, complexes = {}, []
+    infos = assign_pockets(receptor, cfg, pids, {p: poses.coords[p] for p in pids}, cfg.cluster_cap, {}, n_lig)
     for p in pids:
-        cl = receptor.build_cluster(poses.coords[p], cfg.shell, cfg.max_cluster_atoms)
+        cl = infos[p]
         if cl is not None:
             pockets[cl.key] = cl
             complexes.append(cl.n_atoms)
@@ -25,7 +28,7 @@ def report_dry_run(cfg, receptor, sel, lig, workers):
     n_cal = smallest.n_atoms
 
     def cost(n):
-        return t_cal * (n / n_cal) ** 3.5
+        return t_cal * (n / n_cal) ** COST_EXPONENT
 
     sizes = sorted(c.n_atoms for c in pockets.values())
     pocket_t = sum(cost(n) for n in sizes)
@@ -36,9 +39,9 @@ def report_dry_run(cfg, receptor, sel, lig, workers):
     stage1 = (pocket_t + complex_t) / workers + extra
     avg_complex = float(np.mean(sizes)) + n_lig
     relax_t = -(-cfg.relax_top // workers) * cfg.relax_steps * 3 * cost(avg_complex) if cfg.relax_top else 0.0
-    big = receptor.build_cluster(poses.coords[pids[0]], cfg.shell, cfg.final_max_atoms)
+    big = receptor.build_cluster(poses.coords[pids[0]], cfg.shell, cfg.final_cap, cfg.charged_shell)
     final_t = 0.0
-    if big is not None and cfg.final_max_atoms > cfg.max_cluster_atoms and cfg.final_top:
+    if big is not None and cfg.final_top:
         final_t = cost(big.n_atoms) + -(-cfg.final_top // workers) * cost(big.n_atoms + n_lig)
     log(f"dry run: {len(pids)} poses, {len(pockets)} distinct pockets, pocket sizes {sizes[:8]}"
         f"{' ...' if len(sizes) > 8 else ''} atoms (+{n_lig} ligand)")

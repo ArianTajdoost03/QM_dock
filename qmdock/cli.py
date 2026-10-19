@@ -21,9 +21,11 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--opt-steps", type=int, default=100)
     p.add_argument("--n-qm", type=int, default=30)
     p.add_argument("--shell", type=float, default=4.0)
-    p.add_argument("--max-cluster-atoms", type=int, default=150)
+    p.add_argument("--charged-shell", type=float, default=6.0)
+    p.add_argument("--no-share-pockets", dest="share_pockets", action="store_false")
+    p.add_argument("--max-cluster-atoms", type=int, default=0)
     p.add_argument("--final-top", type=int, default=3)
-    p.add_argument("--final-max-atoms", type=int, default=300)
+    p.add_argument("--final-max-atoms", type=int, default=0)
     p.add_argument("--relax-top", type=int, default=3)
     p.add_argument("--relax-steps", type=int, default=5)
     p.add_argument("--uhf", type=int, default=0)
@@ -65,7 +67,8 @@ def config_from_args(a, ligand):
                  centers=[tuple(c) for c in a.center] if a.center else [], auto_sites=a.auto_sites,
                  search_radius=a.search_radius, ligand_charge=a.ligand_charge,
                  n_conformers=a.n_conformers, n_random=a.n_random, n_optimize=a.n_optimize, opt_steps=a.opt_steps, prerelax_steps=a.prerelax_steps,
-                 n_qm=a.n_qm, shell=a.shell, max_cluster_atoms=a.max_cluster_atoms, final_top=a.final_top,
+                 n_qm=a.n_qm, shell=a.shell, charged_shell=a.charged_shell,
+                 share_pockets=a.share_pockets, max_cluster_atoms=a.max_cluster_atoms, final_top=a.final_top,
                  final_max_atoms=a.final_max_atoms, relax_top=a.relax_top, relax_steps=a.relax_steps,
                  uhf=a.uhf, require_metal=a.require_metal, keep_waters=a.keep_waters, add_hydrogens=a.add_hydrogens,
                  receptor_ph=a.receptor_ph, protonation=a.protonation, ph_min=a.ph_min,

@@ -99,3 +99,57 @@ def test_no_cap_hydrogen_is_placed_on_a_metal_and_parity_is_even_everywhere():
         assert cl.electrons() % 2 == 0
         if len(cl.cap_elements):
             assert (np.linalg.norm(cl.cap_coords[:, None] - metals[None], axis=2) > 1.6).all()
+
+
+def ligand_coordinates():
+    from rdkit import Chem
+
+    ligand = Chem.AddHs(next(iter(Chem.SDMolSupplier(str(CA2.parent / "ligand.sdf"), removeHs=False))), addCoords=True)
+    return ligand.GetConformer().GetPositions()
+
+
+def contact_residues(rec, coords, radius):
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(coords)
+    found = {}
+    for a in range(len(rec.coords)):
+        d = tree.query(rec.coords[a])[0]
+        if d <= radius and rec.polymer[rec.unit_of_atom[a]]:
+            r = int(rec.residue_of_atom[a])
+            found[r] = min(found.get(r, 99.0), d)
+    return found
+
+
+def test_every_contacting_residue_is_kept_without_a_cap():
+    rec = load_receptor(str(CA2), 10, False)
+    coords = ligand_coordinates()
+    cl = rec.build_cluster(coords, 4.0)
+    assert set(contact_residues(rec, coords, 4.0)) <= set(cl.key[1])
+    assert cl.truncated == 0 and cl.electrons() % 2 == 0
+
+
+def test_a_cap_cuts_nearest_first_and_never_skips_to_a_smaller_residue():
+    rec = load_receptor(str(CA2), 10, False)
+    coords = ligand_coordinates()
+    contacts = contact_residues(rec, coords, 4.0)
+    cl = rec.build_cluster(coords, 4.0, max_atoms=150)
+    kept = set(cl.key[1])
+    forced = rec.metal_site(contacts)
+    loose = [r for r in contacts if r not in forced]
+    kept_far = max(contacts[r] for r in loose if r in kept)
+    dropped_near = min(contacts[r] for r in loose if r not in kept)
+    assert cl.truncated > 0 and kept_far <= dropped_near
+
+
+def test_charged_residues_and_their_metal_sites_are_added_out_to_the_charged_shell():
+    rec = load_receptor(str(CA2), 10, False)
+    coords = ligand_coordinates()
+    base = rec.build_cluster(coords, 4.0, None, 0.0)
+    wide = rec.build_cluster(coords, 4.0, None, 10.0)
+    extra = set(wide.key[1]) - set(base.key[1])
+    allowed = rec.metal_site([r for r in extra if rec.residue_charge(r) != 0]) | {r for r in extra if rec.residue_charge(r) != 0}
+    assert extra and extra <= allowed
+    assert set(base.key[1]) <= set(wide.key[1]) and wide.electrons() % 2 == 0
+    close = contact_residues(rec, coords, 10.0)
+    assert not [r for r, d in close.items() if d <= 10.0 and rec.residue_charge(r) != 0 and r not in set(wide.key[1])]

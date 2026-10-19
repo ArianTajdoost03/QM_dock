@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from qmdock.config import HARTREE_TO_KCAL
+from qmdock.config import COST_EXPONENT, HARTREE_TO_KCAL
 from qmdock.qm.jobs import energy_job, numbers_of, relax_job
 from qmdock.qm.pool import log
 from qmdock.search.clustering import spread_members
@@ -23,6 +23,55 @@ class QMResult:
     warnings: list = field(default_factory=list)
 
 
+def pocket_members(cluster):
+    return {("u", u) for u in cluster.key[0]} | {("r", r) for r in cluster.key[1]}
+
+
+def pocket_cost(n_pocket, n_ligand):
+    return (n_pocket + n_ligand) ** COST_EXPONENT + n_pocket ** COST_EXPONENT
+
+
+def assign_pockets(receptor, cfg, pids, coord_of, cap, known, n_ligand):
+    own = {p: receptor.build_cluster(coord_of[p], cfg.shell, cap, cfg.charged_shell) for p in pids}
+    infos = dict(own)
+    if not cfg.share_pockets:
+        return infos
+    groups = []
+    for p in pids:
+        if own[p] is None:
+            continue
+        alone = pocket_cost(own[p].n_atoms, n_ligand)
+        best = None
+        for g in groups:
+            union = receptor.build_cluster(np.vstack([coord_of[q] for q in g["poses"] + [p]]),
+                                           cfg.shell, cap, cfg.charged_shell)
+            if union is None or union.electrons() % 2:
+                continue
+            shared = (len(g["poses"]) + 1) * (union.n_atoms + n_ligand) ** COST_EXPONENT + union.n_atoms ** COST_EXPONENT
+            gain = g["separate"] + alone - shared
+            if gain > 0 and (best is None or gain > best[0]):
+                best = (gain, g, union)
+        if best is None:
+            groups.append({"poses": [p], "cluster": own[p], "separate": alone})
+        else:
+            _, g, union = best
+            g["poses"].append(p)
+            g["cluster"] = union
+            g["separate"] += alone
+    for g in groups:
+        shared, k = g["cluster"], len(g["poses"])
+        wanted = pocket_members(shared)
+        saving = shared.n_atoms ** COST_EXPONENT
+        reusable = [(k * ((c.n_atoms + n_ligand) ** COST_EXPONENT - (shared.n_atoms + n_ligand) ** COST_EXPONENT), c)
+                    for c in known.values() if c.electrons() % 2 == 0 and wanted <= pocket_members(c)]
+        reusable = [(extra, c) for extra, c in reusable if extra < saving]
+        if reusable:
+            shared = min(reusable, key=lambda item: item[0])[1]
+        for p in g["poses"]:
+            infos[p] = shared
+    return infos
+
+
 class Session:
     def __init__(self, cfg, receptor, runner):
         self.cfg = cfg
@@ -30,18 +79,21 @@ class Session:
         self.runner = runner
         self.pocket_energy = {}
         self.clusters = {}
+        self.pocket_ids = {}
 
     def evaluate(self, lig, pids, coord_of, lig_e_of, max_atoms):
-        cfg, receptor = self.cfg, self.receptor
-        infos, need = {}, {}
+        cfg = self.cfg
+        known = {k: c for k, c in self.clusters.items() if self.pocket_energy.get(k) is not None}
+        infos = assign_pockets(self.receptor, cfg, pids, coord_of, max_atoms, known, lig.n_atoms)
+        need = {}
         for p in pids:
-            cl = receptor.build_cluster(coord_of[p], cfg.shell, max_atoms)
-            infos[p] = cl
+            cl = infos[p]
             if cl is not None and cl.electrons() % 2 == 0 and cl.key not in self.pocket_energy:
                 need[cl.key] = cl
+        shared_by = Counter(cl.key for cl in infos.values() if cl is not None)
         jobs = [energy_job(("pocket", k), numbers_of(cl.elements()), cl.coords(), cl.charge, cfg)
                 for k, cl in need.items()]
-        res = self.runner.map(jobs, f"pocket energies (<= {max_atoms} atoms)")
+        res = self.runner.map(jobs, f"pocket energies ({len(need)} new pockets for {len(pids)} poses)")
         for k, cl in need.items():
             r = res[("pocket", k)]
             self.pocket_energy[k] = r["energy"] if r["ok"] else None
@@ -53,13 +105,15 @@ class Session:
                 numbers = np.concatenate([numbers_of(cl.elements()), lig.numbers])
                 jobs.append(energy_job(("complex", p), numbers, np.vstack([cl.coords(), coord_of[p]]),
                                        cl.charge + lig.charge, cfg))
-        res = self.runner.map(jobs, f"complex energies (<= {max_atoms} atoms)")
+        res = self.runner.map(jobs, f"complex energies ({len(jobs)} poses)")
         rows = {}
         for p in pids:
             cl = infos[p]
             r = res.get(("complex", p))
             row = {"cluster": cl, "skipped_units": cl.skipped if cl else 0,
-                   "truncated_units": cl.truncated if cl else 0}
+                   "truncated_units": cl.truncated if cl else 0,
+                   "pocket_id": self.pocket_ids.setdefault(cl.key, len(self.pocket_ids)) if cl else None,
+                   "pocket_poses": shared_by[cl.key] if cl else 0}
             if cl is not None and cl.electrons() % 2:
                 row["status"] = "odd_electron"
             elif r is None or not r["ok"]:
@@ -108,7 +162,7 @@ class Session:
                 extra = [p for p in extra if p in lig_e]
             log(f"expanding {len(expanded)} best cluster(s) with {len(extra)} more poses")
             if extra:
-                stage1.update(self.evaluate(lig, extra, coords, lig_e, cfg.max_cluster_atoms))
+                stage1.update(self.evaluate(lig, extra, coords, lig_e, cfg.cluster_cap))
         return cluster_of, expanded
 
     def run(self, lig, sel):
@@ -123,7 +177,7 @@ class Session:
             self.fill_ligand_energies(lig, [p for p in sel.first if self.valid(sel, lig, p)], coords, lig_e)
         else:
             lig_e = {p: lig.conf_e[int(poses.conf[p])] for p in range(P) if self.valid(sel, lig, p)}
-        stage1 = self.evaluate(lig, [p for p in sel.first if p in lig_e], coords, lig_e, cfg.max_cluster_atoms)
+        stage1 = self.evaluate(lig, [p for p in sel.first if p in lig_e], coords, lig_e, cfg.cluster_cap)
         cluster_of, expanded = {}, set()
         if sel.groups:
             cluster_of, expanded = self.expand_clusters(lig, sel, stage1, coords, lig_e)
@@ -161,6 +215,6 @@ class Session:
         coords_f = {p: relaxed[p]["coords"] if p in relaxed else coords[p] for p in cand}
         lig_f = {p: relaxed[p]["lig_e"] if p in relaxed else lig_e[p] for p in cand}
         stage3 = {}
-        if cfg.final_max_atoms > cfg.max_cluster_atoms and cand:
-            stage3 = self.evaluate(lig, cand, coords_f, lig_f, cfg.final_max_atoms)
+        if cand:
+            stage3 = self.evaluate(lig, cand, coords_f, lig_f, cfg.final_cap)
         return QMResult(stage1, relaxed, stage3, expanded, cluster_of, coords, lig_e, time.time() - t, warnings)
