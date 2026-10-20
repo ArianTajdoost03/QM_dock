@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from qmdock.config import COST_EXPONENT, HARTREE_TO_KCAL
-from qmdock.qm.jobs import energy_job, numbers_of, relax_job
+from qmdock.qm.jobs import energy_job, numbers_of, relax_job, strain_job
 from qmdock.qm.pool import log
 from qmdock.search.clustering import spread_members
 
@@ -81,8 +81,9 @@ class Session:
         self.clusters = {}
         self.pocket_ids = {}
 
-    def evaluate(self, lig, pids, coord_of, lig_e_of, max_atoms):
+    def evaluate(self, lig, pids, coord_of, lig_e_of, max_atoms, lig_rel_of=None):
         cfg = self.cfg
+        lig_rel_of = lig_e_of if lig_rel_of is None else lig_rel_of
         known = {k: c for k, c in self.clusters.items() if self.pocket_energy.get(k) is not None}
         infos = assign_pockets(self.receptor, cfg, pids, coord_of, max_atoms, known, lig.n_atoms)
         need = {}
@@ -120,25 +121,49 @@ class Session:
                 row["status"] = "no_pocket" if r is None else "scf_failed"
             else:
                 e_pocket = self.pocket_energy[cl.key]
+                e_int = (r["energy"] - e_pocket - lig_e_of[p]) * HARTREE_TO_KCAL
+                strain = (lig_rel_of[p] - lig.e_ref) * HARTREE_TO_KCAL
+                strain_raw = (lig_e_of[p] - lig.e_ref) * HARTREE_TO_KCAL
                 row.update(status="ok", scf_attempt=r["attempt"], n_atoms=cl.n_atoms + lig.n_atoms,
-                           n_residues=cl.n_residues, cluster_charge=cl.charge,
-                           e_int=(r["energy"] - e_pocket - lig_e_of[p]) * HARTREE_TO_KCAL,
-                           strain=(lig_e_of[p] - lig.e_ref) * HARTREE_TO_KCAL,
-                           e_bind=(r["energy"] - e_pocket - lig.e_ref) * HARTREE_TO_KCAL, e_complex=r["energy"])
+                           n_residues=cl.n_residues, cluster_charge=cl.charge, e_int=e_int, strain=strain,
+                           strain_raw=strain_raw, e_bind=e_int + strain, e_bind_raw=e_int + strain_raw,
+                           e_complex=r["energy"])
             rows[p] = row
         return rows
 
-    def fill_ligand_energies(self, lig, pids, coords, lig_e):
-        need = [p for p in pids if p not in lig_e]
-        jobs = [energy_job(("lig", p), lig.numbers, coords[p], lig.charge, self.cfg) for p in need]
-        for key, r in self.runner.map(jobs, "ligand energies of torsion-modified poses").items():
+    def ligand_energies(self, lig, sel, pids, coords, lig_e, lig_rel):
+        cfg = self.cfg
+        heavy = np.where(lig.heavy)[0]
+        if sel.flex:
+            need = [p for p in pids if p not in lig_rel]
+            jobs = [strain_job(("lig", p), lig.numbers, coords[p], heavy, lig.charge, cfg) for p in need]
+            for key, r in self.runner.map(jobs, "ligand strain (restrained relaxation)").items():
+                if r["ok"]:
+                    lig_e[key[1]] = r["e_start"]
+                    lig_rel[key[1]] = r["energy"]
+            return
+        conformer = {p: int(sel.poses.conf[p]) for p in pids}
+        need = sorted({c for c in conformer.values() if c in lig.conf_e and c not in lig.conf_rel})
+        jobs = [strain_job(("lig", c), lig.numbers, lig.conf_coords[c], heavy, lig.charge, cfg) for c in need]
+        for key, r in self.runner.map(jobs, "ligand strain (restrained relaxation)").items():
             if r["ok"]:
-                lig_e[key[1]] = r["energy"]
+                lig.conf_rel[key[1]] = r["energy"]
+        for p, c in conformer.items():
+            if c in lig.conf_rel:
+                lig_e[p] = lig.conf_e[c]
+                lig_rel[p] = lig.conf_rel[c]
+
+    def relax_cluster(self, cluster, ligand_coords):
+        cap = self.cfg.relax_cap
+        if cap is None or cluster.n_atoms <= cap:
+            return cluster
+        small = self.receptor.build_cluster(ligand_coords, self.cfg.shell, cap, self.cfg.charged_shell)
+        return cluster if small is None or small.electrons() % 2 else small
 
     def valid(self, sel, lig, p):
         return p not in sel.rejected and (sel.flex or int(sel.poses.conf[p]) in lig.conf_e)
 
-    def expand_clusters(self, lig, sel, stage1, coords, lig_e):
+    def expand_clusters(self, lig, sel, stage1, coords, lig_e, lig_rel):
         cfg = self.cfg
         groups = sel.groups
         cluster_of = {m: i for i, g in enumerate(groups) for m in g["members"]}
@@ -157,12 +182,11 @@ class Session:
                 done = [m for m in groups[i]["members"] if m in stage1]
                 extra += spread_members(sel.dist, done, groups[i]["members"], cfg.expand_members)
             extra = [p for p in extra if self.valid(sel, lig, p)]
-            if sel.flex:
-                self.fill_ligand_energies(lig, extra, coords, lig_e)
-                extra = [p for p in extra if p in lig_e]
+            self.ligand_energies(lig, sel, extra, coords, lig_e, lig_rel)
+            extra = [p for p in extra if p in lig_rel]
             log(f"expanding {len(expanded)} best cluster(s) with {len(extra)} more poses")
             if extra:
-                stage1.update(self.evaluate(lig, extra, coords, lig_e, cfg.cluster_cap))
+                stage1.update(self.evaluate(lig, extra, coords, lig_e, cfg.cluster_cap, lig_rel))
         return cluster_of, expanded
 
     def run(self, lig, sel):
@@ -172,15 +196,13 @@ class Session:
         poses = sel.poses
         P = len(poses)
         coords = {p: poses.coords[p] for p in range(P)}
-        lig_e = {}
-        if sel.flex:
-            self.fill_ligand_energies(lig, [p for p in sel.first if self.valid(sel, lig, p)], coords, lig_e)
-        else:
-            lig_e = {p: lig.conf_e[int(poses.conf[p])] for p in range(P) if self.valid(sel, lig, p)}
-        stage1 = self.evaluate(lig, [p for p in sel.first if p in lig_e], coords, lig_e, cfg.cluster_cap)
+        lig_e, lig_rel = {}, {}
+        wanted = [p for p in (sel.first if sel.flex else range(P)) if self.valid(sel, lig, p)]
+        self.ligand_energies(lig, sel, wanted, coords, lig_e, lig_rel)
+        stage1 = self.evaluate(lig, [p for p in sel.first if p in lig_rel], coords, lig_e, cfg.cluster_cap, lig_rel)
         cluster_of, expanded = {}, set()
         if sel.groups:
-            cluster_of, expanded = self.expand_clusters(lig, sel, stage1, coords, lig_e)
+            cluster_of, expanded = self.expand_clusters(lig, sel, stage1, coords, lig_e, lig_rel)
         ok1 = sorted([p for p, r in stage1.items() if r["status"] == "ok"], key=lambda p: stage1[p]["e_bind"])
         if not ok1:
             counts = dict(Counter(r["status"] for r in stage1.values()))
@@ -188,32 +210,36 @@ class Session:
                                "is protonated (explicit hydrogens)")
         log(f"stage 1 done: {len(ok1)} scored, best {stage1[ok1[0]]['e_bind']:.2f} kcal/mol")
 
-        relaxed = {}
-        jobs = []
+        relaxed, jobs, atoms = {}, [], {}
         for p in ok1[:cfg.relax_top]:
-            cl = stage1[p]["cluster"]
+            cl = self.relax_cluster(stage1[p]["cluster"], coords[p])
             numbers = np.concatenate([numbers_of(cl.elements()), lig.numbers])
             pos = np.vstack([cl.coords(), coords[p]])
-            n_rec = cl.n_atoms
-            jobs.append(relax_job(("relax", p), numbers, pos, np.arange(n_rec, len(numbers)),
-                                  cl.charge + lig.charge, cfg, (n_rec, len(numbers)), lig.charge))
+            atoms[p] = cl.n_atoms
+            jobs.append(relax_job(("relax", p), numbers, pos, np.arange(cl.n_atoms, len(numbers)),
+                                  cl.charge + lig.charge, cfg, (cl.n_atoms, len(numbers)), lig.charge))
         for key, r in self.runner.map(jobs, "ligand relaxation").items():
             p = key[1]
             if not r["ok"]:
                 warnings.append(f"relaxation failed for pose {p}: {r['error']}")
                 continue
-            cl = stage1[p]["cluster"]
-            e_pocket = self.pocket_energy[cl.key]
-            relaxed[p] = {"coords": r["pos"][cl.n_atoms:], "lig_e": r["lig_energy"],
-                          "e_bind_relaxed": (r["energy"] - e_pocket - lig.e_ref) * HARTREE_TO_KCAL,
-                          "e_int_relaxed": (r["energy"] - e_pocket - r["lig_energy"]) * HARTREE_TO_KCAL,
-                          "strain_relaxed": (r["lig_energy"] - lig.e_ref) * HARTREE_TO_KCAL}
+            new = r["pos"][atoms[p]:]
+            shift = float(np.sqrt(((new[lig.heavy] - coords[p][lig.heavy]) ** 2).sum(axis=1).mean()))
+            if shift > cfg.relax_max_shift:
+                warnings.append(f"pose {p} moved {shift:.2f} A during relaxation (limit {cfg.relax_max_shift}); "
+                                "relaxed geometry discarded")
+                continue
+            e_bind = stage1[p]["e_bind_raw"] + (r["energy"] - r["e_start"]) * HARTREE_TO_KCAL
+            strain = (r["lig_energy"] - lig.e_ref) * HARTREE_TO_KCAL
+            relaxed[p] = {"coords": new, "lig_e": r["lig_energy"], "e_bind_relaxed": e_bind,
+                          "e_int_relaxed": e_bind - strain, "strain_relaxed": strain, "relax_shift": shift,
+                          "relax_steps_used": r["steps"], "relax_atoms": atoms[p]}
 
         order2 = sorted(ok1, key=lambda p: (p not in relaxed,
                                             relaxed[p]["e_bind_relaxed"] if p in relaxed else stage1[p]["e_bind"]))
-        cand = order2[:cfg.final_top]
-        coords_f = {p: relaxed[p]["coords"] if p in relaxed else coords[p] for p in cand}
-        lig_f = {p: relaxed[p]["lig_e"] if p in relaxed else lig_e[p] for p in cand}
+        cand = [p for p in order2[:cfg.final_top] if p in relaxed]
+        coords_f = {p: relaxed[p]["coords"] for p in cand}
+        lig_f = {p: relaxed[p]["lig_e"] for p in cand}
         stage3 = {}
         if cand:
             stage3 = self.evaluate(lig, cand, coords_f, lig_f, cfg.final_cap)

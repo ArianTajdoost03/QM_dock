@@ -14,7 +14,7 @@ def main():
     p.add_argument("--rank-by", choices=("energy", "per-atom"), default="energy")
     p.add_argument("--top", type=int, default=10)
     p.set_defaults(out="screen_out", n_conformers=30, n_random=20000, n_optimize=300, opt_steps=60, n_qm=6,
-                   relax_top=1, relax_steps=3, final_top=0, protonation="pka", max_states=3, joint_states=True)
+                   relax_top=1, relax_steps=15, final_top=0, protonation="pka", max_states=3, joint_states=True)
     a = p.parse_args()
     if a.dry_run:
         p.error("--dry-run is not supported in screening")

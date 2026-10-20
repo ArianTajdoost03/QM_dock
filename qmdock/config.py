@@ -43,7 +43,7 @@ class Config:
     charged_shell: float = 6.0
     share_pockets: bool = True
     max_cluster_atoms: int = 0
-    final_top: int = 3
+    final_top: int = 6
     final_max_atoms: int = 0
     min_unit_atoms: int = 10
     require_metal: bool = False
@@ -55,10 +55,16 @@ class Config:
     ph_max: float = 8.4
     max_states: int = 4
     uhf: int = 0
-    relax_top: int = 3
-    relax_steps: int = 5
+    relax_top: int = 6
+    relax_steps: int = 30
     relax_fmax: float = 0.002
+    relax_max_atoms: int = 200
+    relax_max_shift: float = 1.5
     prerelax_steps: int = 50
+    ref_conformers: int = 5
+    ref_steps: int = 400
+    strain_restraint: float = 0.2
+    strain_steps: int = 100
     accuracy: float = 1.0
     solvent: str = None
     solvation_model: str = "alpb"
@@ -99,3 +105,7 @@ class Config:
     @property
     def final_cap(self):
         return self.final_max_atoms or None
+
+    @property
+    def relax_cap(self):
+        return self.relax_max_atoms or None

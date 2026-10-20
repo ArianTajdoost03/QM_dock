@@ -88,23 +88,45 @@ def solve(numbers, pos_ang, charge, uhf, gradient=False, accuracy=1.0, solv=None
     raise ConvergenceError(f"SCF failed after {len(LADDER)} attempts: {last}")
 
 
-def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0, solv=None):
+def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0, solv=None, restraint=None, info=None):
     pos = np.array(pos_ang, dtype=float)
     movable = np.asarray(movable)
     worst = [0]
+    first, trace = [], []
+    held, anchor, stiffness = None, None, 0.0
+    if restraint is not None:
+        atoms, stiffness = restraint
+        atoms = np.asarray(atoms)
+        where = {int(m): i for i, m in enumerate(movable)}
+        held = np.array([where[int(a)] for a in atoms])
+        anchor = pos[atoms].copy()
 
     def fun(x):
         p = pos.copy()
         p[movable] = x.reshape(-1, 3)
         e, g, a = solve(numbers, p, charge, uhf, gradient=True, accuracy=accuracy, solv=solv)
         worst[0] = max(worst[0], a)
-        return e, g[movable].ravel() / BOHR_TO_ANG
+        if not first:
+            first.append(e)
+        grad = g[movable] / BOHR_TO_ANG
+        trace.append((e, float(np.abs(grad).max())))
+        if held is not None:
+            d = x.reshape(-1, 3)[held] - anchor
+            e = e + 0.5 * stiffness * float((d ** 2).sum())
+            grad[held] += stiffness * d
+        return e, grad.ravel()
 
     res = minimize(fun, pos[movable].ravel(), jac=True, method="L-BFGS-B",
                    options={"maxiter": max_steps, "gtol": fmax / BOHR_TO_ANG, "maxcor": 10})
     out = pos.copy()
     out[movable] = res.x.reshape(-1, 3)
-    return out, float(res.fun), int(res.nit), worst[0]
+    energy = float(res.fun)
+    if held is not None:
+        energy = solve(numbers, out, charge, uhf, accuracy=accuracy, solv=solv)[0]
+    if info is not None:
+        info["e_start"] = first[0]
+        info["trace"] = trace
+    return out, energy, int(res.nit), worst[0]
 
 
 def run_job(job):
@@ -116,9 +138,11 @@ def run_job(job):
                             accuracy=job["accuracy"], solv=solv)
             out = {"energy": e, "attempt": a}
         else:
+            info = {}
             pos, e, steps, a = relax(job["numbers"], job["pos"], job["movable"], job["charge"],
-                                     job["uhf"], job["steps"], job["fmax"], job["accuracy"], solv)
-            out = {"energy": e, "pos": pos, "steps": steps, "attempt": a}
+                                     job["uhf"], job["steps"], job["fmax"], job["accuracy"], solv,
+                                     job.get("restraint"), info)
+            out = {"energy": e, "pos": pos, "steps": steps, "attempt": a, "e_start": info["e_start"]}
             if "lig_slice" in job:
                 lo, hi = job["lig_slice"]
                 e_lig, _, _ = solve(job["numbers"][lo:hi], pos[lo:hi], job["lig_charge"],

@@ -37,11 +37,11 @@ def report_dry_run(cfg, receptor, sel, lig, workers):
     if cfg.selection == "cluster":
         extra = cfg.cluster_expand * cfg.expand_members * cost(float(np.mean(sizes)) + n_lig) / workers
     stage1 = (pocket_t + complex_t) / workers + extra
-    avg_complex = float(np.mean(sizes)) + n_lig
-    relax_t = -(-cfg.relax_top // workers) * cfg.relax_steps * 3 * cost(avg_complex) if cfg.relax_top else 0.0
+    relax_atoms = float(np.mean(sizes)) if cfg.relax_cap is None else min(float(np.mean(sizes)), cfg.relax_cap)
+    relax_t = -(-cfg.relax_top // workers) * cfg.relax_steps * 1.3 * cost(relax_atoms + n_lig) if cfg.relax_top else 0.0
     big = receptor.build_cluster(poses.coords[pids[0]], cfg.shell, cfg.final_cap, cfg.charged_shell)
     final_t = 0.0
-    if big is not None and cfg.final_top:
+    if big is not None and cfg.relax_top and cfg.final_top:
         final_t = cost(big.n_atoms) + -(-cfg.final_top // workers) * cost(big.n_atoms + n_lig)
     log(f"dry run: {len(pids)} poses, {len(pockets)} distinct pockets, pocket sizes {sizes[:8]}"
         f"{' ...' if len(sizes) > 8 else ''} atoms (+{n_lig} ligand)")

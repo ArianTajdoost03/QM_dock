@@ -24,10 +24,16 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--charged-shell", type=float, default=6.0)
     p.add_argument("--no-share-pockets", dest="share_pockets", action="store_false")
     p.add_argument("--max-cluster-atoms", type=int, default=0)
-    p.add_argument("--final-top", type=int, default=3)
+    p.add_argument("--final-top", type=int, default=6)
     p.add_argument("--final-max-atoms", type=int, default=0)
-    p.add_argument("--relax-top", type=int, default=3)
-    p.add_argument("--relax-steps", type=int, default=5)
+    p.add_argument("--relax-top", type=int, default=6)
+    p.add_argument("--relax-steps", type=int, default=30)
+    p.add_argument("--relax-max-atoms", type=int, default=200)
+    p.add_argument("--relax-max-shift", type=float, default=1.5)
+    p.add_argument("--ref-conformers", type=int, default=5)
+    p.add_argument("--ref-steps", type=int, default=400)
+    p.add_argument("--strain-restraint", type=float, default=0.2)
+    p.add_argument("--strain-steps", type=int, default=100)
     p.add_argument("--uhf", type=int, default=0)
     p.add_argument("--keep-waters", action="store_true")
     p.add_argument("--no-add-hydrogens", dest="add_hydrogens", action="store_false")
@@ -70,6 +76,9 @@ def config_from_args(a, ligand):
                  n_qm=a.n_qm, shell=a.shell, charged_shell=a.charged_shell,
                  share_pockets=a.share_pockets, max_cluster_atoms=a.max_cluster_atoms, final_top=a.final_top,
                  final_max_atoms=a.final_max_atoms, relax_top=a.relax_top, relax_steps=a.relax_steps,
+                 relax_max_atoms=a.relax_max_atoms, relax_max_shift=a.relax_max_shift,
+                 ref_conformers=a.ref_conformers, ref_steps=a.ref_steps,
+                 strain_restraint=a.strain_restraint, strain_steps=a.strain_steps,
                  uhf=a.uhf, require_metal=a.require_metal, keep_waters=a.keep_waters, add_hydrogens=a.add_hydrogens,
                  receptor_ph=a.receptor_ph, protonation=a.protonation, ph_min=a.ph_min,
                  ph_max=a.ph_max, max_states=a.max_states, solvent=a.solvent,
