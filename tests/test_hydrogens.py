@@ -130,3 +130,18 @@ def test_badly_placed_oxt_is_detected():
     n, ca, c = ideal_backbone_end()
     o, oxt = terminal_oxygens(n, ca, c, np.array([0.0, 1.54, 0.0]))
     assert not carboxylate_ok(c, ca, o, c + 1.76 * (oxt - c) / np.linalg.norm(oxt - c))
+
+
+def test_hydrogen_placement_is_reproducible_even_with_many_threads(tmp_path, monkeypatch):
+    pytest.importorskip("pdbfixer")
+    from qmdock.chem.hydrogens import protonate_receptor
+
+    monkeypatch.setenv("OPENMM_CPU_THREADS", "8")
+
+    stripped = tmp_path / "bare.pdb"
+    stripped.write_text("".join(l for l in CA2.read_text().splitlines(True)
+                                if not (l.startswith(("ATOM", "HETATM")) and l[76:78].strip() == "H")))
+    first, second = tmp_path / "a.pdb", tmp_path / "b.pdb"
+    protonate_receptor(str(stripped), str(first), 7.4)
+    protonate_receptor(str(stripped), str(second), 7.4)
+    assert first.read_text() == second.read_text()

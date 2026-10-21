@@ -1,4 +1,5 @@
 import os
+import random
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -14,6 +15,7 @@ NH_LENGTH = 1.01
 XH_LENGTHS = {"C": 1.09, "N": 1.01, "O": 0.96, "S": 1.34}
 XH_SEARCH = 1.4
 HYDROGEN_FORCEFIELD = "amber14-all.xml"
+HYDROGEN_SEED = 7
 CARBOXYL_BOND = 1.25
 CARBOXYL_TOLERANCE = 0.2
 
@@ -142,9 +144,11 @@ def repair_terminal_oxygens(fixer):
 
 
 def build_fixer(path):
+    from openmm import Platform
     from pdbfixer import PDBFixer
 
-    fixer = PDBFixer(filename=path)
+    random.seed(HYDROGEN_SEED)
+    fixer = PDBFixer(filename=path, platform=Platform.getPlatformByName("Reference"))
     fixer.findMissingResidues()
     fixer.missingResidues = {}
     fixer.findNonstandardResidues()

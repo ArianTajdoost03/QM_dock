@@ -88,6 +88,42 @@ def solve(numbers, pos_ang, charge, uhf, gradient=False, accuracy=1.0, solv=None
     raise ConvergenceError(f"SCF failed after {len(LADDER)} attempts: {last}")
 
 
+class Evaluator:
+    def __init__(self, numbers, charge, uhf, accuracy, solv):
+        self.numbers = np.asarray(numbers, dtype=np.int32)
+        self.charge = charge
+        self.uhf = uhf
+        self.accuracy = accuracy
+        self.solv = solv
+        self.calc = None
+        self.res = None
+
+    def build(self, pos_ang):
+        calc = Calculator("GFN2-xTB", self.numbers, np.asarray(pos_ang) / BOHR_TO_ANG,
+                          charge=float(self.charge), uhf=int(self.uhf))
+        calc.set("verbosity", 0)
+        if self.accuracy != 1.0:
+            calc.set("accuracy", float(self.accuracy))
+        for key, value in LADDER[0].items():
+            calc.set(key, value)
+        if self.solv:
+            calc.add(f"{self.solv[0]}-solvation", self.solv[1])
+        return calc
+
+    def __call__(self, pos_ang):
+        try:
+            if self.calc is None:
+                self.calc = self.build(pos_ang)
+            else:
+                self.calc.update(positions=np.asarray(pos_ang) / BOHR_TO_ANG)
+            self.res = self.calc.singlepoint(self.res)
+            return float(self.res.get("energy")), np.array(self.res.get("gradient")), 0
+        except RuntimeError:
+            self.calc, self.res = None, None
+            return solve(self.numbers, pos_ang, self.charge, self.uhf, gradient=True, accuracy=self.accuracy,
+                         solv=self.solv)
+
+
 def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0, solv=None, restraint=None, info=None):
     pos = np.array(pos_ang, dtype=float)
     movable = np.asarray(movable)
@@ -101,10 +137,13 @@ def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0,
         held = np.array([where[int(a)] for a in atoms])
         anchor = pos[atoms].copy()
 
+    check_parity(numbers, charge, uhf)
+    evaluate = Evaluator(numbers, charge, uhf, accuracy, solv)
+
     def fun(x):
         p = pos.copy()
         p[movable] = x.reshape(-1, 3)
-        e, g, a = solve(numbers, p, charge, uhf, gradient=True, accuracy=accuracy, solv=solv)
+        e, g, a = evaluate(p)
         worst[0] = max(worst[0], a)
         if not first:
             first.append(e)

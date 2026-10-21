@@ -4,8 +4,14 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 
+from qmdock.config import COST_EXPONENT
 from qmdock.qm.engine import init_worker, run_job
 from qmdock.ui import bar, log
+
+
+def job_cost(job):
+    steps = job.get("steps", 1) if job["kind"] == "relax" else 1
+    return len(job["numbers"]) ** COST_EXPONENT * steps
 
 
 def default_workers():
@@ -47,6 +53,7 @@ class Runner:
     def map(self, jobs, label):
         if not jobs:
             return {}
+        jobs = sorted(jobs, key=job_cost, reverse=True)
         t0 = time.time()
         results = {}
         with bar(len(jobs), label) as progress:
