@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from qmdock.chem.receptor import find_surface_sites
-from qmdock.config import POOL_FILE
+from qmdock.config import LARGE_RADIUS, POOL_FILE
 from qmdock.pipeline.ligandprep import prepare_conformers
 from qmdock.qm.pool import log
 from qmdock.search.clustering import cluster_poses, pairwise_rmsd, representatives
@@ -82,6 +82,12 @@ def fast_stage(cfg, receptor, lig, centers, warnings):
         log(f"  site {i} {np.round(c, 1)}: {len(env)} env atoms, {len(ps)} clash-free diverse poses")
         log(f"    random poses clash-free: {100 * d['random_clash_free']:.1f}%, after optimisation: "
             f"{d['optimized_clash_free']}/{d['optimized']}")
+        if cfg.void_buriedness > 0 and d["void_points"]:
+            log(f"    seed points: {d['void_buried']}/{d['void_points']} buried (buriedness >= {d['void_threshold']:.2f})"
+                f", {d['outside_radius']} clash-free poses dropped for leaving the search radius")
+        if cfg.search_radius > LARGE_RADIUS:
+            log(f"    WARNING: search radius {cfg.search_radius} A is large; sampling is spread over a big volume. "
+                "Use 6-8 A when the site is known")
         if d.get("mutation"):
             m = d["mutation"]
             fmt = lambda v: "n/a" if v is None else f"{v:.3f}"

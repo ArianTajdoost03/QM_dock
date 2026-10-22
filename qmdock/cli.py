@@ -13,6 +13,8 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--center", nargs=3, type=float, action="append", metavar=("X", "Y", "Z"))
     p.add_argument("--auto-sites", type=int, default=0)
     p.add_argument("--search-radius", type=float, default=8.0)
+    p.add_argument("--radius-tolerance", type=float, default=0.5)
+    p.add_argument("--void-buriedness", type=float, default=0.6)
     p.add_argument("--ligand-charge", type=int)
     p.add_argument("--n-conformers", type=int, default=100)
     p.add_argument("--n-random", type=int, default=50000)
@@ -71,7 +73,8 @@ def build_parser(description, with_ligand=True):
 def config_from_args(a, ligand):
     return Config(receptor=a.receptor, ligand=ligand, out=a.out,
                  centers=[tuple(c) for c in a.center] if a.center else [], auto_sites=a.auto_sites,
-                 search_radius=a.search_radius, ligand_charge=a.ligand_charge,
+                 search_radius=a.search_radius, radius_tolerance=a.radius_tolerance,
+                 void_buriedness=a.void_buriedness, ligand_charge=a.ligand_charge,
                  n_conformers=a.n_conformers, n_random=a.n_random, n_optimize=a.n_optimize, opt_steps=a.opt_steps, prerelax_steps=a.prerelax_steps,
                  n_qm=a.n_qm, shell=a.shell, charged_shell=a.charged_shell,
                  share_pockets=a.share_pockets, max_cluster_atoms=a.max_cluster_atoms, final_top=a.final_top,

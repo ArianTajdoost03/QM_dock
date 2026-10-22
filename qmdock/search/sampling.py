@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from qmdock.search.poses import PoseSet, diverse
+from qmdock.search.buried import buriedness, inside_radius, seed_threshold
 from qmdock.search.scoring import free_points
 
 
@@ -110,6 +111,15 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site, tors=None):
     K = tors.K if tors is not None else 0
     free = 0
     voids = free_points(scorer, ctr, cfg.search_radius)
+    n_voids, n_buried, threshold = len(voids), 0, 0.0
+    if cfg.void_buriedness > 0 and n_voids:
+        points = voids.cpu().numpy()
+        depth = buriedness(points, scorer.env_heavy.cpu().numpy())
+        threshold = seed_threshold(depth, points, center, cfg.void_buriedness)
+        keep = depth >= threshold
+        n_buried = int(keep.sum())
+        if n_buried:
+            voids = voids[torch.as_tensor(keep, device=device)]
     scores = np.empty(n, dtype=np.float32)
     conf = np.empty(n, dtype=np.int64)
     Rs = np.empty((n, 3, 3), dtype=np.float32)
@@ -187,7 +197,8 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site, tors=None):
             partners += scorer.clash_partners(X[bad]).float() if bool(bad.any()) else 0
             Xf.append(X.cpu().numpy())
     X, conf_pop = np.concatenate(Xf), conf_t.cpu().numpy()
-    ok = np.where(~clash)[0]
+    outside = ~inside_radius(X, center, cfg.search_radius, cfg.radius_tolerance)
+    ok = np.where(~clash & ~outside)[0]
     order = ok[np.argsort(sc[ok])]
     if cfg.mutation_rounds > 0 and len(order):
         order = np.array(diverse(X[:, heavy, :], order, cfg.mutation_dedupe, len(order)), dtype=int)
@@ -196,6 +207,8 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site, tors=None):
     else:
         keep = diverse(X[:, heavy, :], order, cfg.diversity_rmsd, cfg.n_qm * 3)
     diag = {"random_clash_free": free / n, "optimized": len(top), "optimized_clash_free": int((~clash[:len(top)]).sum()),
-            "partners": partners.cpu().numpy(), "mutation": mutation, "torsions": K}
+            "partners": partners.cpu().numpy(), "mutation": mutation, "torsions": K,
+            "void_points": n_voids, "void_buried": n_buried, "void_threshold": threshold,
+            "outside_radius": int((~clash & outside).sum())}
     return PoseSet(X[keep].astype(float), conf_pop[keep], sc[keep].astype(float),
                    np.full(len(keep), site, dtype=int), diag)

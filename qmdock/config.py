@@ -16,6 +16,7 @@ OUTPUT_FILES = (POSES_FILE, RESULTS_FILE, SUMMARY_FILE, CLUSTERS_FILE, STATES_FI
 HARTREE_TO_KCAL = 627.509474
 BOHR_TO_ANG = 0.529177210903
 COST_EXPONENT = 2.8
+LARGE_RADIUS = 10.0
 
 
 @dataclass
@@ -26,6 +27,8 @@ class Config:
     centers: list = field(default_factory=list)
     auto_sites: int = 0
     search_radius: float = 8.0
+    radius_tolerance: float = 0.5
+    void_buriedness: float = 0.6
     env_margin: float = 6.0
     ligand_charge: int = None
     n_conformers: int = 100
