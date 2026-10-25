@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from qmdock.chem.atomtypes import score_types
 from qmdock.chem.receptor import find_surface_sites
 from qmdock.config import LARGE_RADIUS, POOL_FILE
 from qmdock.pipeline.ligandprep import prepare_conformers
@@ -66,14 +67,16 @@ def fast_stage(cfg, receptor, lig, centers, warnings):
     tors = TorsionModel(lig.rotors, lig.mol, device) if lig.rotors else None
     for i, c in enumerate(centers):
         env = receptor.environment(c, cfg.search_radius + extent + cfg.env_margin)
-        scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, cfg)
+        lig_types, env_types = score_types(receptor, env, lig.mol, cfg)
+        scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, cfg, lig_types, env_types)
         ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), cfg, cfg.seed + i, i, tors)
         for factor in (0.9, 0.8, 0.7):
             if len(ps):
                 break
             log(f"  no clash-free pose; retrying with clash thresholds scaled by {factor}")
             soft = replace(cfg, clash_heavy=cfg.clash_heavy * factor, clash_hydrogen=cfg.clash_hydrogen * factor)
-            scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, soft)
+            scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, soft, lig_types,
+                            env_types)
             ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), soft, cfg.seed + i, i, tors)
             if len(ps):
                 scale_used = min(scale_used, factor)

@@ -3,6 +3,7 @@ from dataclasses import replace
 import numpy as np
 from rdkit import Chem
 
+from qmdock.chem.atomtypes import score_types
 from qmdock.pipeline.fast import Selection, pick_device
 from qmdock.qm.pool import log
 from qmdock.search.poses import PoseSet
@@ -121,7 +122,8 @@ def transfer_selection(cfg, receptor, lig_t, lig_s, sel_t, pool):
     for site in np.unique(poses.site):
         idx = np.where(poses.site == site)[0]
         env = receptor.environment(pool.centers[int(site)], cfg.search_radius + pool.extent + cfg.env_margin)
-        scorer = Scorer(receptor.elements[env], receptor.coords[env], lig_s.elements, device, soft)
+        lig_types, env_types = score_types(receptor, env, lig_s.mol, cfg)
+        scorer = Scorer(receptor.elements[env], receptor.coords[env], lig_s.elements, device, soft, lig_types, env_types)
         step = max(1, scorer.chunk(False, True))
         with torch.no_grad():
             for s in range(0, len(idx), step):

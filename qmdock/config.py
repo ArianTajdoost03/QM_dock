@@ -29,6 +29,10 @@ class Config:
     search_radius: float = 8.0
     radius_tolerance: float = 0.5
     void_buriedness: float = 0.6
+    chemical_score: bool = True
+    hbond_weight: float = 0.587
+    hydrophobic_weight: float = 0.0351
+    elec_weight: float = 0.0
     env_margin: float = 6.0
     ligand_charge: int = None
     n_conformers: int = 100

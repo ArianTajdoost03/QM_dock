@@ -1,10 +1,13 @@
+from types import SimpleNamespace
+
 import torch
 
 from qmdock.chem.elements import DONOR_ELEMENTS, METALS, VDW_RADII
+from qmdock.search.terms import pair_energy
 
 
 class Scorer:
-    def __init__(self, env_elements, env_coords, lig_elements, device, cfg):
+    def __init__(self, env_elements, env_coords, lig_elements, device, cfg, lig_types=None, env_types=None):
         self.device = device
         self.env = torch.as_tensor(env_coords, dtype=torch.float32, device=device)
         lig_r = torch.tensor([VDW_RADII.get(e, 1.7) for e in lig_elements], device=device)
@@ -14,7 +17,9 @@ class Scorer:
         env_h = torch.tensor([e == "H" for e in env_elements], device=device)
         lig_donor = torch.tensor([e in DONOR_ELEMENTS for e in lig_elements], device=device)
         env_metal = torch.tensor([e in METALS for e in env_elements], device=device)
-        self.coord = lig_donor[:, None] & env_metal[None, :]
+        typed = lig_types is not None and env_types is not None
+        weight = torch.as_tensor(lig_types.metal_weight, dtype=torch.float32, device=device) if typed else lig_donor.float()
+        self.coord = (weight > 0)[:, None] & env_metal[None, :]
         scale = torch.where(lig_h[:, None] | env_h[None, :], cfg.clash_hydrogen, cfg.clash_heavy)
         self.dmin = torch.where(self.coord, torch.tensor(cfg.coordination_min, device=device),
                                 scale * self.rsum)
@@ -26,10 +31,49 @@ class Scorer:
         sub = (self.lh[:, None], self.eh[None, :])
         self.rsum_h, self.coord_h, self.dmin_h = self.rsum[sub], self.coord[sub], self.dmin[sub]
         self.env_heavy = self.env[self.eh]
+        self.pair_full = self._pair(cfg, weight, lig_types if typed else None, env_types if typed else None,
+                                    env_metal, None, None)
+        self.pair_heavy = self._pair(cfg, weight, lig_types if typed else None, env_types if typed else None,
+                                     env_metal, self.lh, self.eh)
+        terms = (self.pair_full.hbond, self.pair_full.hydrophobic, self.pair_full.charges)
+        self.load = 1.0 + 0.5 * sum(t is not None for t in terms)
+
+    def _pair(self, cfg, weight, lig_types, env_types, env_metal, lig_idx, env_idx):
+        def lv(v):
+            return v if lig_idx is None else v[lig_idx]
+
+        def ev(v):
+            return v if env_idx is None else v[env_idx]
+
+        def mat(m):
+            return m if lig_idx is None else m[lig_idx[:, None], env_idx[None, :]]
+
+        pair = SimpleNamespace(rsum=mat(self.rsum), coord=mat(self.coord), dmin=mat(self.dmin), metal_weight=lv(weight),
+                               metal_cols=None, metal_free=None, hbond=None, hydrophobic=None, charges=None,
+                               w_hbond=cfg.hbond_weight, w_hydrophobic=cfg.hydrophobic_weight, w_elec=cfg.elec_weight)
+        metals = torch.where(ev(env_metal))[0]
+        if len(metals):
+            pair.metal_cols = metals
+        if lig_types is None:
+            return pair
+        as_bool = lambda a: torch.as_tensor(a, dtype=torch.bool, device=self.device)
+        as_float = lambda a: torch.as_tensor(a, dtype=torch.float32, device=self.device)
+        if len(metals):
+            pair.metal_free = ev(as_float(env_types.metal_free))[metals]
+        if cfg.hbond_weight:
+            donor_l, acceptor_l = lv(as_bool(lig_types.donor)), lv(as_bool(lig_types.acceptor))
+            donor_e, acceptor_e = ev(as_bool(env_types.donor)), ev(as_bool(env_types.acceptor))
+            pair.hbond = ((donor_l[:, None] & acceptor_e[None, :]) | (acceptor_l[:, None] & donor_e[None, :])).float()
+        if cfg.hydrophobic_weight:
+            pair.hydrophobic = (lv(as_bool(lig_types.hydrophobic))[:, None]
+                                & ev(as_bool(env_types.hydrophobic))[None, :]).float()
+        if cfg.elec_weight:
+            pair.charges = lv(as_float(lig_types.charge))[:, None] * ev(as_float(env_types.charge))[None, :]
+        return pair
 
     def chunk(self, grad=False, full=True):
         pairs = self.n_lig * self.n_env if full else len(self.lh) * len(self.eh)
-        return max(1, int(self.budget // (pairs * (6 if grad else 1))))
+        return max(1, int(self.budget // (pairs * (6 if grad else 1) * self.load)))
 
     def clash_partners(self, X):
         d = torch.cdist(X, self.env, compute_mode="donot_use_mm_for_euclid_dist")
@@ -37,18 +81,12 @@ class Scorer:
 
     def evaluate(self, X, full=True):
         if full:
-            pos, env, rsum, coord_mask, dmin = X, self.env, self.rsum, self.coord, self.dmin
+            pos, env, pair = X, self.env, self.pair_full
         else:
-            pos, env = X[:, self.lh], self.env_heavy
-            rsum, coord_mask, dmin = self.rsum_h, self.coord_h, self.dmin_h
+            pos, env, pair = X[:, self.lh], self.env_heavy, self.pair_heavy
         d = torch.cdist(pos, env, compute_mode="donot_use_mm_for_euclid_dist")
-        s = d - rsum
-        steric = (-0.0356 * torch.exp(-(s / 0.5) ** 2) - 0.00516 * torch.exp(-((s - 3.0) / 2.0) ** 2)
-                  + 0.84 * torch.clamp(s, max=0.0) ** 2)
-        coord = -1.0 * torch.exp(-((d - 2.1) / 0.35) ** 2) + 5.0 * torch.relu(1.8 - d) ** 2
-        e = torch.where(coord_mask, coord, steric)
-        clash = (d < dmin).flatten(1).any(dim=1)
-        return e.flatten(1).sum(dim=1), clash
+        clash = (d < pair.dmin).flatten(1).any(dim=1)
+        return pair_energy(torch, d, pair), clash
 
 
 def free_points(scorer, center, radius, spacing=0.5, clearance=2.6):

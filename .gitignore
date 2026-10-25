@@ -4,3 +4,4 @@ __pycache__/
 data/bench_test_1/raw_pdbs
 data/bench_test_1/split_dir
 data/bench_test_1/runs
+paper
