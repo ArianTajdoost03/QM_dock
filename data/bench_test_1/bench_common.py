@@ -71,3 +71,26 @@ def read_json(path):
 def write_json(path, data):
     with open(path, "w") as fh:
         json.dump(data, fh, indent=2)
+
+
+PROCESS_GB = 2.5
+WORKER_GB = 1.5
+MEMORY_USE = 0.9
+
+
+def plan_jobs(jobs, total_workers, available_gb, fixed_workers=None):
+    jobs = max(1, jobs)
+    while True:
+        per = fixed_workers or max(1, total_workers // jobs)
+        if jobs == 1 or available_gb is None or jobs * (PROCESS_GB + per * WORKER_GB) <= available_gb * MEMORY_USE:
+            return jobs, per
+        jobs -= 1
+
+
+def option_value(tokens, name):
+    for i, t in enumerate(tokens):
+        if t == name and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if t.startswith(name + "="):
+            return t.split("=", 1)[1]
+    return None

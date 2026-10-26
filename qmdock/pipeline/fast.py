@@ -88,6 +88,7 @@ def fast_stage(cfg, receptor, lig, centers, warnings):
         if cfg.void_buriedness > 0 and d["void_points"]:
             log(f"    seed points: {d['void_buried']}/{d['void_points']} buried (buriedness >= {d['void_threshold']:.2f})"
                 f", {d['outside_radius']} clash-free poses dropped for leaving the search radius")
+        log("    phase seconds: " + ", ".join(f"{k} {v:.1f}" for k, v in d["timings"].items()))
         if cfg.search_radius > LARGE_RADIUS:
             log(f"    WARNING: search radius {cfg.search_radius} A is large; sampling is spread over a big volume. "
                 "Use 6-8 A when the site is known")

@@ -1,3 +1,4 @@
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -80,11 +81,17 @@ class Session:
         self.pocket_energy = {}
         self.clusters = {}
         self.pocket_ids = {}
+        self.lock = threading.Lock()
+
+    def pocket_id(self, key):
+        with self.lock:
+            return self.pocket_ids.setdefault(key, len(self.pocket_ids))
 
     def evaluate(self, lig, pids, coord_of, lig_e_of, max_atoms, lig_rel_of=None):
         cfg = self.cfg
         lig_rel_of = lig_e_of if lig_rel_of is None else lig_rel_of
-        known = {k: c for k, c in self.clusters.items() if self.pocket_energy.get(k) is not None}
+        with self.lock:
+            known = {k: c for k, c in list(self.clusters.items()) if self.pocket_energy.get(k) is not None}
         infos = assign_pockets(self.receptor, cfg, pids, coord_of, max_atoms, known, lig.n_atoms)
         need = {}
         for p in pids:
@@ -94,26 +101,31 @@ class Session:
         shared_by = Counter(cl.key for cl in infos.values() if cl is not None)
         jobs = [energy_job(("pocket", k), numbers_of(cl.elements()), cl.coords(), cl.charge, cfg)
                 for k, cl in need.items()]
-        res = self.runner.map(jobs, f"pocket energies ({len(need)} new pockets for {len(pids)} poses)")
-        for k, cl in need.items():
-            r = res[("pocket", k)]
-            self.pocket_energy[k] = r["energy"] if r["ok"] else None
-            self.clusters[k] = cl
-        jobs = []
+        with self.lock:
+            ready = {k for k, v in self.pocket_energy.items() if v is not None}
+        n_pockets = len(jobs)
         for p in pids:
             cl = infos[p]
-            if cl is not None and self.pocket_energy.get(cl.key) is not None:
+            if cl is not None and cl.electrons() % 2 == 0 and (cl.key in need or cl.key in ready):
                 numbers = np.concatenate([numbers_of(cl.elements()), lig.numbers])
                 jobs.append(energy_job(("complex", p), numbers, np.vstack([cl.coords(), coord_of[p]]),
                                        cl.charge + lig.charge, cfg))
-        res = self.runner.map(jobs, f"complex energies ({len(jobs)} poses)")
+        res = self.runner.map(jobs, f"pocket and complex energies ({n_pockets} new pockets, "
+                                    f"{len(jobs) - n_pockets} complexes for {len(pids)} poses)")
+        with self.lock:
+            for k, cl in need.items():
+                r = res[("pocket", k)]
+                self.pocket_energy[k] = r["energy"] if r["ok"] else None
+                self.clusters[k] = cl
         rows = {}
         for p in pids:
             cl = infos[p]
             r = res.get(("complex", p))
+            if cl is None or self.pocket_energy.get(cl.key) is None:
+                r = None
             row = {"cluster": cl, "skipped_units": cl.skipped if cl else 0,
                    "truncated_units": cl.truncated if cl else 0,
-                   "pocket_id": self.pocket_ids.setdefault(cl.key, len(self.pocket_ids)) if cl else None,
+                   "pocket_id": self.pocket_id(cl.key) if cl else None,
                    "pocket_poses": shared_by[cl.key] if cl else 0}
             if cl is not None and cl.electrons() % 2:
                 row["status"] = "odd_electron"

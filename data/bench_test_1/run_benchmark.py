@@ -10,9 +10,11 @@ from concurrent.futures import ThreadPoolExecutor
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 
-from bench_common import REPO, find_complexes, load_table, read_ids, read_json, read_options, write_json
+from bench_common import (REPO, find_complexes, load_table, option_value, plan_jobs, read_ids, read_json, read_options,
+                          write_json)
 from qmdock.chem.ligand import load_ligand
 from qmdock.config import OUTPUT_FILES, STATE_PREFIX
+from qmdock.qm.pool import available_gb, default_workers
 from qmdock.screening.ligands import prepare_molecule
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -104,6 +106,7 @@ def main():
     parser.add_argument("--ids")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--jobs", type=int, default=1)
+    parser.add_argument("--total-workers", type=int, default=0)
     parser.add_argument("--timeout", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--python", default=sys.executable)
@@ -119,6 +122,18 @@ def main():
         tokens = read_options(path=None if args.opts else args.options, text=args.opts)
     except ValueError as exc:
         sys.exit(str(exc))
+
+    if args.jobs > 1:
+        given = option_value(tokens, "--workers")
+        fixed = int(given) if given else None
+        total = args.total_workers or default_workers()
+        jobs, per = plan_jobs(args.jobs, total, available_gb(), fixed)
+        if jobs != args.jobs:
+            print("memory: %.1f GB available, running %d complexes at once instead of %d" % (available_gb() or 0, jobs, args.jobs))
+        args.jobs = jobs
+        if fixed is None and jobs > 1:
+            tokens = list(tokens) + ["--workers", str(per)]
+        print("running %d complexes at once with %d QM workers each (%d workers in total)" % (jobs, per, jobs * per))
 
     complexes = find_complexes(args.data)
     if args.ids:

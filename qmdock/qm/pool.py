@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -14,14 +15,20 @@ def job_cost(job):
     return len(job["numbers"]) ** COST_EXPONENT * steps
 
 
-def default_workers():
-    cores = os.cpu_count() or 1
+def available_gb():
     try:
         with open("/proc/meminfo") as f:
-            avail = next(int(l.split()[1]) for l in f if l.startswith("MemAvailable")) / 1e6
-        return max(1, min(cores, int(avail // 1.5)))
+            return next(int(l.split()[1]) for l in f if l.startswith("MemAvailable")) / 1e6
     except (OSError, StopIteration):
+        return None
+
+
+def default_workers():
+    cores = os.cpu_count() or 1
+    avail = available_gb()
+    if avail is None:
         return cores
+    return max(1, min(cores, int(avail // 1.5)))
 
 
 class Runner:
@@ -29,6 +36,7 @@ class Runner:
         self.workers = workers
         self.fn = fn
         self.pool = None
+        self.lock = threading.Lock()
 
     def _new_pool(self, n):
         return ProcessPoolExecutor(n, mp_context=get_context("spawn"), initializer=init_worker)
@@ -65,15 +73,23 @@ class Runner:
                 for job in jobs:
                     record(self.fn(job))
             else:
+                current = self.pool
                 try:
-                    for r in self.pool.map(self.fn, jobs, chunksize=1):
+                    for r in current.map(self.fn, jobs, chunksize=1):
                         record(r)
                 except BrokenProcessPool:
                     log("  a worker process died (segfault or memory kill); rerunning unfinished jobs one per process")
-                    self.pool.shutdown(cancel_futures=True)
-                    self.pool = self._new_pool(self.workers)
+                    with self.lock:
+                        if self.pool is current:
+                            current.shutdown(cancel_futures=True)
+                            self.pool = self._new_pool(self.workers)
                     for job in [j for j in jobs if j["key"] not in results]:
                         record(self.isolated(job))
         crashed = sum(1 for r in results.values() if not r["ok"] and "crashed" in r.get("error", ""))
-        log(f"  {label}: {len(jobs)} jobs in {time.time() - t0:.0f}s" + (f", {crashed} crashed the QM engine" if crashed else ""))
+        wall = time.time() - t0
+        spent = [r.get("seconds", 0.0) for r in results.values()]
+        detail = ""
+        if self.pool is not None and len(jobs) > 1 and wall > 5 and sum(spent) > 0:
+            detail = f" (longest job {max(spent):.0f}s, worker use {sum(spent) / (self.workers * wall):.0%})"
+        log(f"  {label}: {len(jobs)} jobs in {wall:.0f}s{detail}" + (f", {crashed} crashed the QM engine" if crashed else ""))
         return results

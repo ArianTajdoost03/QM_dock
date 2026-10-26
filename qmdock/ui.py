@@ -1,3 +1,4 @@
+import threading
 from contextlib import contextmanager
 
 try:
@@ -6,6 +7,11 @@ except ImportError:
     tqdm = None
 
 _state = {"sink": None}
+_local = threading.local()
+
+
+def set_label(text):
+    _local.label = text
 
 
 class NullBar:
@@ -26,6 +32,7 @@ class NullBar:
 
 
 def log(msg):
+    msg = getattr(_local, "label", "") + msg
     sink = _state["sink"]
     if sink is not None:
         sink.write(msg + "\n")
@@ -48,6 +55,6 @@ def log_to(path):
 
 
 def bar(total, desc, unit="job", leave=False):
-    if tqdm is None or _state["sink"] is not None:
+    if tqdm is None or _state["sink"] is not None or getattr(_local, "label", ""):
         return NullBar()
     return tqdm(total=total, desc=desc, unit=unit, leave=leave, disable=None, dynamic_ncols=True)

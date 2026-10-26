@@ -91,6 +91,7 @@ class Config:
     torsion_penalty: float = 0.03
     mutation_torsion: float = 0.5
     joint_states: bool = False
+    parallel_states: bool = True
     transfer_rmsd: float = 1.0
     mutation_rounds: int = 0
     mutation_parents: int = 100
@@ -104,6 +105,10 @@ class Config:
     device: str = "auto"
     seed: int = 7
     pair_budget: float = 6e7
+    grid_spacing: float = 0.25
+    grid_far_spacing: float = 1.0
+    grid_max_nodes: int = 5000000
+    grid_shortlist: float = 2.0
 
     @property
     def cluster_cap(self):

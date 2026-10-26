@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import torch
 
 from qmdock.chem.elements import DONOR_ELEMENTS, METALS, VDW_RADII
+from qmdock.search.grid import EnergyGrid
 from qmdock.search.terms import pair_energy
 
 
@@ -35,6 +36,11 @@ class Scorer:
                                     env_metal, None, None)
         self.pair_heavy = self._pair(cfg, weight, lig_types if typed else None, env_types if typed else None,
                                      env_metal, self.lh, self.eh)
+        self.charge_l = self.charge_e = None
+        if typed and cfg.elec_weight:
+            self.charge_l = torch.as_tensor(lig_types.charge, dtype=torch.float32, device=device)[self.lh]
+            self.charge_e = torch.as_tensor(env_types.charge, dtype=torch.float32, device=device)[self.eh]
+        self.grid = None
         terms = (self.pair_full.hbond, self.pair_full.hydrophobic, self.pair_full.charges)
         self.load = 1.0 + 0.5 * sum(t is not None for t in terms)
 
@@ -70,6 +76,21 @@ class Scorer:
         if cfg.elec_weight:
             pair.charges = lv(as_float(lig_types.charge))[:, None] * ev(as_float(env_types.charge))[None, :]
         return pair
+
+    def attach_grid(self, center, half_width, cfg):
+        self.grid = None
+        if cfg.grid_spacing > 0:
+            self.grid = EnergyGrid(self, center, half_width, cfg.grid_spacing, cfg.grid_far_spacing, cfg.grid_max_nodes)
+        return self.grid
+
+    def energy(self, X):
+        if self.grid is not None:
+            return self.grid(X[:, self.lh])
+        return self.evaluate(X, full=False)[0]
+
+    def chunk_grid(self, n_atoms, n_torsions):
+        per_pose = n_atoms * (12 * n_torsions + 8 * self.grid.n_channels + 60)
+        return max(1, int(self.budget // per_pose))
 
     def chunk(self, grad=False, full=True):
         pairs = self.n_lig * self.n_env if full else len(self.lh) * len(self.eh)

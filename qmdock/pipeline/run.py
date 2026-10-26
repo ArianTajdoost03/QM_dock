@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 
 import pandas as pd
@@ -17,6 +18,7 @@ from qmdock.pipeline.outputs import write_results
 from qmdock.pipeline.qmstages import Session
 from qmdock.qm.engine import preflight
 from qmdock.qm.pool import Runner, default_workers, log
+from qmdock.ui import set_label
 
 
 def dock_state(cfg, mol, receptor, runner, session):
@@ -44,9 +46,23 @@ def add_summary(row, out):
                n_transfer_rejected=summary.get("n_transfer_rejected"))
 
 
+def run_states(cfg, states, runner, work, allow_parallel=True):
+    def labelled(i):
+        set_label(f"[state {i}] " if parallel else "")
+        try:
+            return work(i, states[i])
+        finally:
+            set_label("")
+
+    parallel = allow_parallel and cfg.parallel_states and len(states) > 1 and runner.workers > 1
+    if not parallel:
+        return [labelled(i) for i in range(len(states))]
+    with ThreadPoolExecutor(len(states)) as ex:
+        return list(ex.map(labelled, range(len(states))))
+
+
 def run_sequential(cfg, states, receptor, runner, session):
-    rows = []
-    for i, st in enumerate(states):
+    def work(i, st):
         sub = replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"), ligand_charge=None)
         row = state_row(i, st, sub)
         log(f"=== protonation state {i}/{len(states) - 1}: {st['smiles']} ===")
@@ -57,8 +73,9 @@ def run_sequential(cfg, states, receptor, runner, session):
         except (RuntimeError, ValueError) as exc:
             row["error"] = str(exc)[:300]
             log(f"  state {i} failed: {row['error']}")
-        rows.append(row)
-    return rows
+        return row
+
+    return run_states(cfg, states, runner, work, allow_parallel=False)
 
 
 def run_joint(cfg, states, receptor, runner, session):
@@ -74,8 +91,8 @@ def run_joint(cfg, states, receptor, runner, session):
     if cfg.dry_run:
         report_dry_run(base_cfg, receptor, sel_t, lig_t, runner.workers)
         return [state_row(i, st, replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"))) for i, st in enumerate(states)]
-    rows = []
-    for i, st in enumerate(states):
+
+    def work(i, st):
         sub = replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"), ligand_charge=None)
         row = state_row(i, st, sub)
         log(f"=== protonation state {i}/{len(states) - 1}: {st['smiles']} ===")
@@ -87,13 +104,14 @@ def run_joint(cfg, states, receptor, runner, session):
                 sel_i, info = transfer_selection(sub, receptor, lig_t, lig_i, sel_t, pool)
                 row.update(info)
             res = session.run(lig_i, sel_i)
-            write_results(sub, sub.out, lig_i, sel_i, res, timings, warnings, receptor)
+            write_results(sub, sub.out, lig_i, sel_i, res, dict(timings), list(warnings), receptor)
             add_summary(row, sub.out)
         except (RuntimeError, ValueError) as exc:
             row["error"] = str(exc)[:300]
             log(f"  state {i} failed: {row['error']}")
-        rows.append(row)
-    return rows
+        return row
+
+    return run_states(cfg, states, runner, work)
 
 
 def dock_molecule(cfg, base, receptor, runner, session):

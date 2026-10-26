@@ -159,3 +159,19 @@ def test_failures_are_attributed_to_search_selection_or_qm_ranking(tmp_path):
     crystal = {cid: str(tmp_path / "data" / cid / f"{cid}_ligand.sdf") for cid in expected}
     for cid, label in expected.items():
         assert attribute_failures.attribute(cid, str(tmp_path / "runs" / cid), crystal[cid], 2.0)["diagnosis"] == label
+
+
+def test_parallel_complexes_share_the_workers_and_respect_memory():
+    assert bench_common.plan_jobs(1, 12, 64.0) == (1, 12)
+    assert bench_common.plan_jobs(2, 12, 64.0) == (2, 6)
+    assert bench_common.plan_jobs(3, 12, 64.0) == (3, 4)
+    assert bench_common.plan_jobs(4, 12, 30.0) == (3, 4)
+    assert bench_common.plan_jobs(4, 12, 1.0)[0] == 1
+    assert bench_common.plan_jobs(2, 12, None) == (2, 6)
+    assert bench_common.plan_jobs(2, 12, 64.0, fixed_workers=5) == (2, 5)
+
+
+def test_option_value_reads_both_spellings():
+    assert bench_common.option_value(["--workers", "6"], "--workers") == "6"
+    assert bench_common.option_value(["--workers=6"], "--workers") == "6"
+    assert bench_common.option_value(["--n-qm", "5"], "--workers") is None

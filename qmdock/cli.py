@@ -69,6 +69,9 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--torsion-fraction", type=float, default=0.5)
     p.add_argument("--export-dft", type=int, default=0)
     p.add_argument("--workers", type=int, default=0)
+    p.add_argument("--sequential-states", action="store_true")
+    p.add_argument("--grid-spacing", type=float, default=0.25)
+    p.add_argument("--grid-shortlist", type=float, default=2.0)
     p.add_argument("--device", default="auto")
     p.add_argument("--seed", type=int, default=7)
     return p
@@ -95,7 +98,8 @@ def config_from_args(a, ligand):
                  expand_window=a.expand_window, cluster_pool=a.cluster_pool, dry_run=a.dry_run,
                  reuse_fast=a.reuse_fast, export_dft=a.export_dft, torsions=a.torsions, max_torsions=a.max_torsions,
                  torsion_fraction=a.torsion_fraction, joint_states=a.joint_states, transfer_rmsd=a.transfer_rmsd, mutation_rounds=a.mutation_rounds,
-                 mutation_parents=a.mutation_parents, mutation_children=a.mutation_children, workers=a.workers, device=a.device,
+                 mutation_parents=a.mutation_parents, mutation_children=a.mutation_children, workers=a.workers, device=a.device, grid_spacing=a.grid_spacing, parallel_states=not a.sequential_states,
+                 grid_shortlist=a.grid_shortlist,
                  seed=a.seed)
 
 
