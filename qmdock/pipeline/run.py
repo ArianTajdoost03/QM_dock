@@ -8,6 +8,7 @@ import pandas as pd
 
 from qmdock.chem.hydrogens import load_protonated
 from qmdock.chem.ligand import load_ligand
+from qmdock.chem.pka import parse_overrides
 from qmdock.chem.protonation import ligand_states
 from qmdock.config import CONFIG_FILE, STATE_PREFIX, STATES_FILE, SUMMARY_FILE
 from qmdock.pipeline.estimate import report_dry_run
@@ -33,6 +34,11 @@ def dock_state(cfg, mol, receptor, runner, session):
         return None
     res = session.run(lig, sel)
     return write_results(cfg, cfg.out, lig, sel, res, timings, warnings, receptor)[0]
+
+
+def enumerate_states(cfg, base):
+    return ligand_states(base, cfg.protonation, cfg.ph_min, cfg.ph_max, cfg.max_states, cfg.seed, ph=cfg.state_ph,
+                         window=cfg.state_window, overrides=parse_overrides(cfg.pka_overrides), log=log)
 
 
 def state_row(i, st, sub, penalty=None):
@@ -121,7 +127,7 @@ def run_joint(cfg, states, receptor, runner, session):
 
 
 def dock_molecule(cfg, base, receptor, runner, session):
-    states = ligand_states(base, cfg.protonation, cfg.ph_min, cfg.ph_max, cfg.max_states, cfg.seed)
+    states = enumerate_states(cfg, base)
     if len(states) == 1:
         row = state_row(0, states[0], cfg)
         dock_state(cfg, states[0]["mol"], receptor, runner, session)
@@ -141,7 +147,7 @@ def run(cfg):
     base = load_ligand(cfg.ligand)
     if not cfg.centers and not cfg.auto_sites:
         cfg = replace(cfg, centers=[tuple(base.GetConformer().GetPositions().mean(axis=0))])
-    states = ligand_states(base, cfg.protonation, cfg.ph_min, cfg.ph_max, cfg.max_states, cfg.seed)
+    states = enumerate_states(cfg, base)
     workers = cfg.workers or default_workers()
     log(f"CPU workers: {workers}")
     t = time.time()

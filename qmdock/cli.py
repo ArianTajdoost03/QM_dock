@@ -51,6 +51,7 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--accuracy", type=float, default=1.0)
     p.add_argument("--relax-accuracy", type=float, default=1.0)
     p.add_argument("--state-ph", type=float, default=7.4)
+    p.add_argument("--state-window", type=float, default=5.0)
     p.add_argument("--no-pka-penalty", action="store_true")
     p.add_argument("--pka", action="append", default=[])
     p.add_argument("--require-metal", action="store_true")
@@ -105,7 +106,7 @@ def config_from_args(a, ligand):
                  strain_restraint=a.strain_restraint, strain_steps=a.strain_steps,
                  uhf=a.uhf, require_metal=a.require_metal, keep_waters=a.keep_waters, add_hydrogens=a.add_hydrogens,
                  receptor_ph=a.receptor_ph, protonation=a.protonation, ph_min=a.ph_min,
-                 ph_max=a.ph_max, max_states=a.max_states, state_ph=a.state_ph, accuracy=a.accuracy, relax_accuracy=a.relax_accuracy,
+                 ph_max=a.ph_max, max_states=a.max_states, state_ph=a.state_ph, state_window=a.state_window, accuracy=a.accuracy, relax_accuracy=a.relax_accuracy,
                  pka_penalty=not a.no_pka_penalty, pka_overrides=a.pka, solvent=a.solvent,
                  solvation_model=a.solvation_model, selection=a.selection, cluster_radius=a.cluster_radius,
                  cluster_expand=a.cluster_expand, expand_members=a.expand_members,

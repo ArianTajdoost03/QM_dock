@@ -62,6 +62,7 @@ class Config:
     ph_max: float = 8.4
     max_states: int = 4
     state_ph: float = 7.4
+    state_window: float = 5.0
     pka_penalty: bool = True
     pka_overrides: list = field(default_factory=list)
     uhf: int = 0

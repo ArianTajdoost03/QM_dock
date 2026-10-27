@@ -2,6 +2,11 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
+from qmdock.chem.pka import state_penalties
+
+MAX_FREE_SITES = 10
+DEFAULT_WINDOW = 5.0
+
 
 ACID_SITES = (
     ("[CX3](=O)[OX2H1]", 2),
@@ -70,46 +75,83 @@ def state_record(mol, label):
             "label": label}
 
 
-def ligand_states(base, mode, ph_min, ph_max, max_states, seed):
+def enumerate_all(neutral, ph, overrides):
+    scored = []
+    for idx, acid in find_sites(neutral):
+        toggled = toggle(neutral, idx, acid)
+        if toggled is None:
+            continue
+        free_energy = state_penalties([toggled], ph, overrides)[0]["free_energy"]
+        scored.append((abs(free_energy), idx, acid, free_energy))
+    scored.sort()
+    free, fixed = scored[:MAX_FREE_SITES], scored[MAX_FREE_SITES:]
+    base = neutral
+    for _, idx, acid, free_energy in fixed:
+        if free_energy < 0:
+            toggled = toggle(base, idx, acid)
+            if toggled is not None:
+                base = toggled
+    out = []
+    for mask in range(1 << len(free)):
+        m = base
+        for bit, (_, idx, acid, _) in enumerate(free):
+            if mask >> bit & 1 and m is not None:
+                m = toggle(m, idx, acid)
+        if m is not None:
+            out.append(m)
+    return out
+
+
+def ligand_states(base, mode, ph_min, ph_max, max_states, seed, ph=None, window=DEFAULT_WINDOW, overrides=None,
+                  log=None):
     given = state_record(base, "as given")
     if mode == "none":
         return [given]
+    ph = (ph_min + ph_max) / 2 if ph is None else ph
     flat = Chem.RemoveHs(base)
-    found = {given["smiles"]: given}
     if mode == "pka":
         from dimorphite_dl import protonate_smiles
 
-        candidates = []
+        mols = []
         for smi in protonate_smiles(Chem.MolToSmiles(flat), ph_min=ph_min, ph_max=ph_max,
-                                    max_variants=max_states):
+                                    max_variants=max(16, 4 * max_states)):
             m = Chem.MolFromSmiles(smi)
             if m is not None:
-                candidates.append(m)
+                mols.append(m)
         label = f"Dimorphite-DL pH {ph_min}-{ph_max}"
-        found = {}
     elif mode == "all":
-        neutral = rdMolStandardize.Uncharger().uncharge(flat)
-        sites = find_sites(neutral)[:5]
-        candidates = []
-        for mask in range(1 << len(sites)):
-            m = neutral
-            for bit, (idx, acid) in enumerate(sites):
-                if mask >> bit & 1 and m is not None:
-                    m = toggle(m, idx, acid)
-            if m is not None:
-                candidates.append(m)
+        mols = [flat] + enumerate_all(rdMolStandardize.Uncharger().uncharge(flat), ph, overrides)
         label = "site enumeration"
     else:
         raise ValueError(f"unknown protonation mode: {mode}")
-    for m in candidates:
-        smi = Chem.MolToSmiles(m)
-        if smi in found:
+    unique = {}
+    for m in mols:
+        unique.setdefault(Chem.MolToSmiles(m), m)
+    if not unique:
+        return [given]
+    items = list(unique.items())
+    penalties = [r["penalty"] for r in state_penalties([m for _, m in items], ph, overrides)]
+    order = sorted(range(len(items)), key=lambda i: (round(penalties[i], 6), abs(Chem.GetFormalCharge(items[i][1])),
+                                                     items[i][0]))
+    states, dropped = [], []
+    for i in order:
+        smi, m = items[i]
+        if states and (len(states) >= max_states or (mode == "all" and window > 0 and penalties[i] > window)):
+            dropped.append((smi, penalties[i]))
             continue
         if smi == given["smiles"]:
-            found[smi] = given
-            continue
-        mh = embed(m, seed)
-        if mh is not None:
-            found[smi] = state_record(mh, label)
-    states = sorted(found.values(), key=lambda s: (abs(s["charge"]), s["charge"]))[:max_states]
+            record = dict(given)
+        else:
+            mh = embed(m, seed)
+            if mh is None:
+                dropped.append((smi, penalties[i]))
+                continue
+            record = state_record(mh, label)
+        record["penalty"] = penalties[i]
+        states.append(record)
+    if log is not None:
+        log(f"protonation states at pH {ph:g}: kept {len(states)} of {len(items)} candidates "
+            f"(ranked by pKa penalty, window {window:g} kcal/mol, at most {max_states})")
+        for smi, penalty in dropped[:6]:
+            log(f"  dropped {smi} (penalty {penalty:.1f} kcal/mol)")
     return states or [given]
