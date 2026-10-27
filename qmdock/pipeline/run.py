@@ -16,6 +16,7 @@ from qmdock.pipeline.joint import transfer_selection
 from qmdock.pipeline.ligandprep import describe_ligand, prepare_conformers
 from qmdock.pipeline.outputs import write_results
 from qmdock.pipeline.qmstages import Session
+from qmdock.pipeline.stateselect import apply_penalty, finalize, prepare
 from qmdock.qm.engine import preflight
 from qmdock.qm.pool import Runner, default_workers, log
 from qmdock.ui import set_label
@@ -34,8 +35,9 @@ def dock_state(cfg, mol, receptor, runner, session):
     return write_results(cfg, cfg.out, lig, sel, res, timings, warnings, receptor)[0]
 
 
-def state_row(i, st, sub):
-    return {"state": i, "smiles": st["smiles"], "charge": st["charge"], "label": st["label"], "dir": sub.out}
+def state_row(i, st, sub, penalty=None):
+    row = {"state": i, "smiles": st["smiles"], "charge": st["charge"], "label": st["label"], "dir": sub.out}
+    return apply_penalty(row, penalty)
 
 
 def add_summary(row, out):
@@ -62,9 +64,11 @@ def run_states(cfg, states, runner, work, allow_parallel=True):
 
 
 def run_sequential(cfg, states, receptor, runner, session):
+    penalties = prepare(cfg, states)
+
     def work(i, st):
         sub = replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"), ligand_charge=None)
-        row = state_row(i, st, sub)
+        row = state_row(i, st, sub, penalties[i])
         log(f"=== protonation state {i}/{len(states) - 1}: {st['smiles']} ===")
         try:
             dock_state(sub, st["mol"], receptor, runner, session)
@@ -75,11 +79,12 @@ def run_sequential(cfg, states, receptor, runner, session):
             log(f"  state {i} failed: {row['error']}")
         return row
 
-    return run_states(cfg, states, runner, work, allow_parallel=False)
+    return finalize(run_states(cfg, states, runner, work, allow_parallel=False), cfg)
 
 
 def run_joint(cfg, states, receptor, runner, session):
     base_cfg = replace(cfg, ligand_charge=None)
+    penalties = prepare(cfg, states)
     ligs = [describe_ligand(base_cfg, st["mol"]) for st in states]
     t_idx = max(range(len(states)), key=lambda i: states[i]["mol"].GetNumAtoms())
     log(f"joint search on state {t_idx} ({states[t_idx]['smiles']}), the most protonated; "
@@ -90,11 +95,12 @@ def run_joint(cfg, states, receptor, runner, session):
     sel_t = select_poses(base_cfg, receptor, lig_t, pool)
     if cfg.dry_run:
         report_dry_run(base_cfg, receptor, sel_t, lig_t, runner.workers)
-        return [state_row(i, st, replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"))) for i, st in enumerate(states)]
+        return [state_row(i, st, replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}")), penalties[i])
+                for i, st in enumerate(states)]
 
     def work(i, st):
         sub = replace(cfg, out=os.path.join(cfg.out, f"{STATE_PREFIX}{i}"), ligand_charge=None)
-        row = state_row(i, st, sub)
+        row = state_row(i, st, sub, penalties[i])
         log(f"=== protonation state {i}/{len(states) - 1}: {st['smiles']} ===")
         try:
             if i == t_idx:
@@ -111,7 +117,7 @@ def run_joint(cfg, states, receptor, runner, session):
             log(f"  state {i} failed: {row['error']}")
         return row
 
-    return run_states(cfg, states, runner, work)
+    return finalize(run_states(cfg, states, runner, work), cfg)
 
 
 def dock_molecule(cfg, base, receptor, runner, session):
@@ -154,6 +160,10 @@ def run(cfg):
         rows = (run_joint if joint else run_sequential)(cfg, states, receptor, runner, session)
     table = pd.DataFrame(rows)
     table.to_csv(os.path.join(cfg.out, STATES_FILE), index=False)
-    log("energies of different protonation states are not comparable (different numbers of protons); "
-        "rank poses within a state and compare states by geometry or with pKa corrections")
+    if cfg.pka_penalty:
+        log("states are compared with a pKa-based population penalty added to e_final; raw energies of "
+            "different protonation states are not comparable (see states.csv: pka_penalty_kcal, best_e_corrected_kcal)")
+    else:
+        log("energies of different protonation states are not comparable (different numbers of protons); "
+            "the pKa penalty is switched off, so the selected state is the one with the lowest raw energy")
     return table

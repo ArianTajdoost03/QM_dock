@@ -61,6 +61,9 @@ class Config:
     ph_min: float = 6.4
     ph_max: float = 8.4
     max_states: int = 4
+    state_ph: float = 7.4
+    pka_penalty: bool = True
+    pka_overrides: list = field(default_factory=list)
     uhf: int = 0
     relax_top: int = 6
     relax_steps: int = 30
@@ -73,6 +76,7 @@ class Config:
     strain_restraint: float = 0.2
     strain_steps: int = 100
     accuracy: float = 1.0
+    relax_accuracy: float = 1.0
     solvent: str = None
     solvation_model: str = "alpb"
     selection: str = "greedy"

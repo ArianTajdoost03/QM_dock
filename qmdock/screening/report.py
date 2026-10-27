@@ -4,18 +4,15 @@ import pandas as pd
 from rdkit import Chem
 
 from qmdock.config import POSES_FILE
+from qmdock.pipeline.stateselect import choose_state
 
 COLUMNS = ["rank", "name", "index", "status", "e_final_kcal", "e_per_heavy_atom", "level", "best_state",
-           "best_state_smiles", "charge", "gap_to_next_family_kcal", "n_states", "n_states_ok", "heavy_atoms",
+           "best_state_smiles", "charge", "gap_to_next_family_kcal", "pka_penalty_kcal", "n_states", "n_states_ok", "heavy_atoms",
            "input_smiles", "seconds", "notes", "error", "dir"]
 
 
 def choose_best_state(rows):
-    ok = [r for r in rows if "error" not in r and r.get("best_e_final_kcal") is not None]
-    if not ok:
-        return None
-    top = max(r["best_level"] for r in ok)
-    return min((r for r in ok if r["best_level"] == top), key=lambda r: r["best_e_final_kcal"])
+    return choose_state(rows)
 
 
 def ligand_result(rec, rows, seconds, ldir):
@@ -29,7 +26,8 @@ def ligand_result(rec, rows, seconds, ldir):
         return result
     result.update(status="ok", e_final_kcal=best["best_e_final_kcal"], level=best["best_level"],
                   best_state=best["state"], best_state_smiles=best["smiles"], charge=best["charge"],
-                  gap_to_next_family_kcal=best.get("gap_to_next_family_kcal"), pose_file=os.path.join(best["dir"], POSES_FILE),
+                  gap_to_next_family_kcal=best.get("gap_to_next_family_kcal"),
+                  pka_penalty_kcal=best.get("pka_penalty_kcal"), pose_file=os.path.join(best["dir"], POSES_FILE),
                   e_per_heavy_atom=(best["best_e_final_kcal"] / rec.heavy_atoms if rec.heavy_atoms else None))
     return result
 

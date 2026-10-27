@@ -48,6 +48,11 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--ph-min", type=float, default=6.4)
     p.add_argument("--ph-max", type=float, default=8.4)
     p.add_argument("--max-states", type=int, default=4)
+    p.add_argument("--accuracy", type=float, default=1.0)
+    p.add_argument("--relax-accuracy", type=float, default=1.0)
+    p.add_argument("--state-ph", type=float, default=7.4)
+    p.add_argument("--no-pka-penalty", action="store_true")
+    p.add_argument("--pka", action="append", default=[])
     p.add_argument("--require-metal", action="store_true")
     p.add_argument("--solvent")
     p.add_argument("--solvation-model", choices=("alpb", "gbsa"), default="alpb")
@@ -78,6 +83,14 @@ def build_parser(description, with_ligand=True):
 
 
 def config_from_args(a, ligand):
+    from qmdock.chem.pka import parse_overrides
+
+    try:
+        parse_overrides(a.pka)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    if a.accuracy <= 0 or a.relax_accuracy <= 0:
+        raise SystemExit("--accuracy and --relax-accuracy must be positive")
     return Config(receptor=a.receptor, ligand=ligand, out=a.out,
                  centers=[tuple(c) for c in a.center] if a.center else [], auto_sites=a.auto_sites,
                  search_radius=a.search_radius, radius_tolerance=a.radius_tolerance,
@@ -92,7 +105,8 @@ def config_from_args(a, ligand):
                  strain_restraint=a.strain_restraint, strain_steps=a.strain_steps,
                  uhf=a.uhf, require_metal=a.require_metal, keep_waters=a.keep_waters, add_hydrogens=a.add_hydrogens,
                  receptor_ph=a.receptor_ph, protonation=a.protonation, ph_min=a.ph_min,
-                 ph_max=a.ph_max, max_states=a.max_states, solvent=a.solvent,
+                 ph_max=a.ph_max, max_states=a.max_states, state_ph=a.state_ph, accuracy=a.accuracy, relax_accuracy=a.relax_accuracy,
+                 pka_penalty=not a.no_pka_penalty, pka_overrides=a.pka, solvent=a.solvent,
                  solvation_model=a.solvation_model, selection=a.selection, cluster_radius=a.cluster_radius,
                  cluster_expand=a.cluster_expand, expand_members=a.expand_members,
                  expand_window=a.expand_window, cluster_pool=a.cluster_pool, dry_run=a.dry_run,

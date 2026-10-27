@@ -22,7 +22,7 @@ def main():
     parser.add_argument("--options", default=os.path.join(HERE, "dock_options.txt"))
     parser.add_argument("--opts")
     parser.add_argument("--ids", default=os.path.join(HERE, "ids_213.txt"))
-    parser.add_argument("--state-select", choices=("energy", "first", "pooled"), default="pooled")
+    parser.add_argument("--state-select", choices=("corrected", "pooled-corrected", "energy", "pooled", "first"), default="pooled-corrected")
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=0)
     parser.add_argument("--limit", type=int, default=0)

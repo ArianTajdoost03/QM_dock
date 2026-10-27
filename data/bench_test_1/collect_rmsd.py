@@ -7,10 +7,12 @@ import re
 import pandas as pd
 
 from bench_common import find_complexes, load_table, read_ids, read_json
-from qmdock.config import POSES_FILE, STATE_PREFIX
+from qmdock.chem.pka import penalties_from_smiles
+from qmdock.config import POSES_FILE, STATE_PREFIX, STATES_FILE
 from rmsd import best_rmsd, load_mols
 
 TOP_N = (3, 5, 10)
+SELECT_MODES = ("corrected", "pooled-corrected", "energy", "pooled", "first")
 
 
 def state_dirs(run_dir):
@@ -18,6 +20,18 @@ def state_dirs(run_dir):
         return [run_dir]
     found = [d for d in glob.glob(os.path.join(run_dir, STATE_PREFIX + "*")) if os.path.exists(os.path.join(d, POSES_FILE))]
     return sorted(found, key=lambda d: int(re.search(re.escape(STATE_PREFIX) + r"(\d+)$", d).group(1)))
+
+
+def run_penalties(run_dir, ph):
+    path = os.path.join(run_dir, STATES_FILE)
+    if not os.path.exists(path):
+        return {}
+    table = pd.read_csv(path)
+    if "pka_penalty_kcal" in table and table["pka_penalty_kcal"].notna().all():
+        values = [float(v) for v in table["pka_penalty_kcal"]]
+    else:
+        values = [r["penalty"] for r in penalties_from_smiles(list(table["smiles"]), ph)]
+    return {STATE_PREFIX + str(int(i)): v for i, v in zip(table["state"], values)}
 
 
 def energy_of(mol):
@@ -43,7 +57,7 @@ def finite_min(values):
     return min(values) if values else math.nan
 
 
-def evaluate(cid, run_dir, crystal_fallback, reference, select):
+def evaluate(cid, run_dir, crystal_fallback, reference, select, ph=7.4):
     row = {"id": cid, "metal": reference.get(cid, {}).get("metal", ""), "logKd": math.nan, "status": ""}
     try:
         row["logKd"] = float(reference[cid]["logKd"])
@@ -74,21 +88,24 @@ def evaluate(cid, run_dir, crystal_fallback, reference, select):
     if all(math.isnan(p["rmsd"]) for _, poses in per_state for p in poses):
         row["status"] = "rmsd_error"
         return row, pose_records
-    if select == "pooled":
+    penalties = run_penalties(run_dir, ph) if select in ("corrected", "pooled-corrected") else {}
+    if select in ("pooled", "pooled-corrected"):
         merged = [(name_, p) for name_, poses_ in per_state for p in poses_]
-        merged.sort(key=lambda item: item[1]["e_final"] if not math.isnan(item[1]["e_final"]) else math.inf)
+        merged.sort(key=lambda item: item[1]["e_final"] + penalties.get(item[0], 0.0)
+                    if not math.isnan(item[1]["e_final"]) else math.inf)
         name, first = merged[0]
         ranked = [p for _, p in merged]
         row.update(selected_state=name, top1_rank_in_state=first["rank"])
     else:
-        if select == "energy":
-            tops = [poses_[0]["e_final"] if poses_ else math.nan for _, poses_ in per_state]
+        if select in ("energy", "corrected"):
+            tops = [poses_[0]["e_final"] + penalties.get(name_, 0.0) if poses_ else math.nan for name_, poses_ in per_state]
             keyed = [(t if not math.isnan(t) else math.inf, i) for i, t in enumerate(tops)]
             chosen = min(keyed)[1]
         else:
             chosen = 0
         name, ranked = per_state[chosen]
         row.update(selected_state=name, top1_rank_in_state=1)
+    row["selected_state_penalty"] = penalties.get(name, 0.0)
     row.update(
         status="ok", n_states=len(per_state),
         n_poses=sum(len(p) for _, p in per_state),
@@ -113,7 +130,8 @@ def main():
     parser.add_argument("--data", required=True)
     parser.add_argument("--reference", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_table.csv"))
     parser.add_argument("--ids")
-    parser.add_argument("--state-select", choices=("energy", "first", "pooled"), default="energy")
+    parser.add_argument("--state-select", choices=SELECT_MODES, default="corrected")
+    parser.add_argument("--state-ph", type=float, default=7.4)
     parser.add_argument("--out")
     args = parser.parse_args()
 
@@ -129,7 +147,7 @@ def main():
 
     rows, poses = [], []
     for n, cid in enumerate(ids, 1):
-        row, records = evaluate(cid, os.path.join(runs, cid), crystals.get(cid), reference, args.state_select)
+        row, records = evaluate(cid, os.path.join(runs, cid), crystals.get(cid), reference, args.state_select, args.state_ph)
         rows.append(row)
         poses.extend(records)
         print("[%d/%d] %s %s %s" % (n, len(ids), cid, row["status"], "%.2f" % row["top1_rmsd"] if "top1_rmsd" in row else ""), flush=True)

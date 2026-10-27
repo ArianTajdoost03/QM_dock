@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from bench_common import find_complexes, read_ids, read_json
-from collect_rmsd import state_dirs
+from collect_rmsd import run_penalties, state_dirs
 from qmdock.config import POOL_FILE, POSES_FILE, RESULTS_FILE, STATE_PREFIX
 from qmdock.pipeline.fast import load_cache
 from rmsd import load_mols, skeleton
@@ -46,7 +46,7 @@ def reference_for(path, states, n_atoms):
     return None
 
 
-def attribute(cid, run_dir, crystal, threshold):
+def attribute(cid, run_dir, crystal, threshold, ph=7.4):
     row = {"id": cid, "status": "", "diagnosis": ""}
     if not os.path.isdir(run_dir):
         row["status"] = "not_run"
@@ -102,7 +102,9 @@ def attribute(cid, run_dir, crystal, threshold):
     row["n_qm_evaluated"] = len(ok)
     native_qm = ok[ok.pool_rmsd <= threshold]
     row["n_native_qm"] = len(native_qm)
-    top = ok.loc[ok.e_final.idxmin()]
+    penalties = run_penalties(run_dir, ph)
+    ok["e_corrected"] = ok.e_final + ok.state.map(penalties).fillna(0.0)
+    top = ok.loc[ok.e_corrected.idxmin()]
     row["top1_pool_rmsd"] = float(top.pool_rmsd)
     row["top1_state"] = top.state
     state_tops = [g.loc[g.e_final.idxmin()] for _, g in ok.groupby("state")]
@@ -126,6 +128,7 @@ def main():
     parser.add_argument("--data", required=True)
     parser.add_argument("--ids")
     parser.add_argument("--threshold", type=float, default=2.0)
+    parser.add_argument("--state-ph", type=float, default=7.4)
     parser.add_argument("--out")
     args = parser.parse_args()
 
@@ -135,7 +138,7 @@ def main():
     rows = []
     for n, cid in enumerate(ids, 1):
         try:
-            row = attribute(cid, os.path.join(runs, cid), crystals.get(cid), args.threshold)
+            row = attribute(cid, os.path.join(runs, cid), crystals.get(cid), args.threshold, args.state_ph)
         except Exception as exc:
             row = {"id": cid, "status": "error:%s" % exc, "diagnosis": ""}
         rows.append(row)
