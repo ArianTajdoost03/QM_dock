@@ -59,6 +59,26 @@ def centers_for(cfg, receptor, lig):
     return centers
 
 
+def guarded_search(cfg, make_scorer, run, device):
+    current = cfg
+    for attempt in range(3):
+        try:
+            return run(make_scorer(current), current)
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower() or attempt == 2:
+                raise
+            if device.type == "cuda":
+                import torch
+
+                torch.cuda.empty_cache()
+            changes = {"pair_budget": current.pair_budget / 2}
+            if attempt == 1:
+                changes["grid_spacing"] = 0.0
+            current = replace(current, **changes)
+            log(f"  GPU out of memory; retrying with pair budget {current.pair_budget:.2g}"
+                + (" and without the energy grid" if attempt == 1 else ""))
+
+
 def fast_stage(cfg, receptor, lig, centers, warnings):
     device = pick_device(cfg.device)
     extent = ligand_extent(lig)
@@ -68,16 +88,22 @@ def fast_stage(cfg, receptor, lig, centers, warnings):
     for i, c in enumerate(centers):
         env = receptor.environment(c, cfg.search_radius + extent + cfg.env_margin)
         lig_types, env_types = score_types(receptor, env, lig.mol, cfg)
-        scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, cfg, lig_types, env_types)
-        ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), cfg, cfg.seed + i, i, tors)
+        ps = guarded_search(
+            cfg, lambda conf: Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, conf,
+                                     lig_types, env_types),
+            lambda scorer, conf: search(scorer, lig.conf_coords, lig.heavy, np.array(c), conf, cfg.seed + i, i, tors),
+            device)
         for factor in (0.9, 0.8, 0.7):
             if len(ps):
                 break
             log(f"  no clash-free pose; retrying with clash thresholds scaled by {factor}")
             soft = replace(cfg, clash_heavy=cfg.clash_heavy * factor, clash_hydrogen=cfg.clash_hydrogen * factor)
-            scorer = Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, soft, lig_types,
-                            env_types)
-            ps = search(scorer, lig.conf_coords, lig.heavy, np.array(c), soft, cfg.seed + i, i, tors)
+            ps = guarded_search(
+                soft, lambda conf: Scorer(receptor.elements[env], receptor.coords[env], lig.elements, device, conf,
+                                          lig_types, env_types),
+                lambda scorer, conf: search(scorer, lig.conf_coords, lig.heavy, np.array(c), conf, cfg.seed + i, i,
+                                            tors),
+                device)
             if len(ps):
                 scale_used = min(scale_used, factor)
                 warnings.append(f"site {i}: poses found only with clash thresholds scaled by {factor}")

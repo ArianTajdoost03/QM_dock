@@ -1,1 +1,1 @@
---solvent water --selection cluster --torsions --protonation all --joint-states --workers 12 --final-top 0 --cluster-expand 0 --mutation-rounds 0 --search-radius 6 --n-qm 15  --charged-shell 5 --shell 3 --relax-steps 10 --n-random 20000 --n-optimize 500 --opt-step 50 
+--solvent water --selection cluster --torsions --protonation all --joint-states --workers 12 --final-top 0 --cluster-expand 0 --mutation-rounds 0 --search-radius 6 --n-qm 20  --charged-shell 5 --shell 3 --relax-steps 10 --n-random 50000 --n-optimize 500 --opt-step 50 

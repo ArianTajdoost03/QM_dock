@@ -106,6 +106,11 @@ def score_population(scorer, C, conf, R, t, tors=None, dl=None):
     return np.concatenate(scores), np.concatenate(clashes)
 
 
+def exact_clash(scorer, X):
+    step = scorer.chunk(False, False)
+    return torch.cat([scorer.evaluate(X[i:i + step], full=False)[1] for i in range(0, len(X), step)])
+
+
 def exact_scores(scorer, C, idx, conf, Rs, ts, dls, tors, device):
     out = []
     step = scorer.chunk(False, False)
@@ -189,7 +194,7 @@ def search(scorer, conf_coords, heavy, center, cfg, seed, site, tors=None):
                 sc = scorer.energy(X)
                 cl = None
                 if s < probe:
-                    cl = scorer.evaluate(X[:max(0, min(b, probe - s))], full=False)[1]
+                    cl = exact_clash(scorer, X[:max(0, min(b, probe - s))])
             else:
                 sc, cl = scorer.evaluate(X, full=False)
             if tors is not None:
