@@ -165,6 +165,8 @@ def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0,
     if info is not None:
         info["e_start"] = first[0]
         info["trace"] = trace
+        info["converged"] = bool(res.success)
+        info["gmax"] = trace[-1][1] * BOHR_TO_ANG
     return out, energy, int(res.nit), worst[0]
 
 
@@ -181,11 +183,12 @@ def run_job(job):
             pos, e, steps, a = relax(job["numbers"], job["pos"], job["movable"], job["charge"],
                                      job["uhf"], job["steps"], job["fmax"], job["accuracy"], solv,
                                      job.get("restraint"), info)
-            out = {"energy": e, "pos": pos, "steps": steps, "attempt": a, "e_start": info["e_start"]}
+            out = {"energy": e, "pos": pos, "steps": steps, "attempt": a, "e_start": info["e_start"],
+                   "converged": info["converged"], "gmax": info["gmax"]}
             if "lig_slice" in job:
                 lo, hi = job["lig_slice"]
                 e_lig, _, _ = solve(job["numbers"][lo:hi], pos[lo:hi], job["lig_charge"],
-                                    job["uhf"], accuracy=job["accuracy"], solv=solv)
+                                    job.get("lig_uhf", 0), accuracy=job["accuracy"], solv=solv)
                 out["lig_energy"] = e_lig
         out["ok"] = True
     except (RuntimeError, ValueError) as exc:

@@ -65,7 +65,10 @@ class Config:
     state_window: float = 5.0
     pka_penalty: bool = True
     pka_overrides: list = field(default_factory=list)
-    uhf: int = 0
+    uhf: int | str = "auto"
+    relax_select: str = "balanced"
+    pocket_mode: str = "pose"
+    site_max_atoms: int = 0
     relax_top: int = 6
     relax_steps: int = 30
     relax_fmax: float = 0.002

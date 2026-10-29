@@ -3,6 +3,7 @@ import time
 import numpy as np
 
 from qmdock.config import COST_EXPONENT
+from qmdock.chem.spin import cluster_uhf
 from qmdock.qm.jobs import energy_job, numbers_of
 from qmdock.qm.engine import run_job
 from qmdock.pipeline.qmstages import assign_pockets
@@ -23,7 +24,8 @@ def report_dry_run(cfg, receptor, sel, lig, workers):
         return
     smallest = min(pockets.values(), key=lambda c: c.n_atoms)
     t0 = time.time()
-    res = run_job(energy_job(("cal", 0), numbers_of(smallest.elements()), smallest.coords(), smallest.charge, cfg))
+    res = run_job(energy_job(("cal", 0), numbers_of(smallest.elements()), smallest.coords(), smallest.charge, cfg,
+                                  cluster_uhf(smallest, cfg.uhf) or 0))
     t_cal = res["seconds"] if res["ok"] else time.time() - t0
     n_cal = smallest.n_atoms
 

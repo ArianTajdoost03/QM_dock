@@ -6,6 +6,7 @@ import pandas as pd
 from rdkit import Chem
 
 from qmdock.chem.elements import METALS
+from qmdock.chem.spin import cluster_uhf
 from qmdock.config import BEST_COMPLEX_FILE, CLUSTERS_FILE, POSES_FILE, RESULTS_FILE, SUMMARY_FILE
 from qmdock.chem.pdb_io import write_xyz
 from qmdock.qm.pool import log
@@ -25,7 +26,7 @@ def pose_table(sel, res):
         if sel.origin is not None:
             row["pool_index"] = int(sel.origin[p])
         for k in ("n_atoms", "n_residues", "cluster_charge", "pocket_id", "pocket_poses", "skipped_units",
-                  "truncated_units", "scf_attempt", "e_int", "strain", "strain_raw", "e_bind", "e_bind_raw"):
+                  "truncated_units", "scf_attempt", "uhf", "spin_note", "e_int", "strain", "strain_raw", "e_bind", "e_bind_raw"):
             if k in s1:
                 row[k] = s1[k]
         if p in res.relaxed:
@@ -59,6 +60,13 @@ def write_cluster_table(out, sel, res):
     pd.DataFrame(table).to_csv(os.path.join(out, CLUSTERS_FILE), index=False)
 
 
+def interaction_energy(row):
+    for name in ("e_int_final", "e_int_relaxed", "e_int"):
+        if name in row and row[name] == row[name]:
+            return float(row[name])
+    return None
+
+
 def export_dft(cfg, out, lig, res, ranked, final_coords, best):
     top_ids = [int(p) for p in ranked[(ranked.status == "ok") & (ranked.level == best.level)].pose[:cfg.export_dft]]
     for p in top_ids:
@@ -71,8 +79,9 @@ def export_dft(cfg, out, lig, res, ranked, final_coords, best):
         write_xyz(os.path.join(d, "ligand.xyz"), lig.elements, final_coords[p], f"ligand pose {p}")
         with open(os.path.join(d, "manifest.json"), "w") as f:
             json.dump({"pose": p, "charge_complex": cl.charge + lig.charge, "charge_pocket": cl.charge,
-                       "charge_ligand": lig.charge, "xtb_e_final_kcal": float(ranked[ranked.pose == p].e_final.iloc[0])},
-                      f, indent=2)
+                       "charge_ligand": lig.charge, "xtb_e_final_kcal": float(ranked[ranked.pose == p].e_final.iloc[0]),
+                       "xtb_e_int_kcal": interaction_energy(ranked[ranked.pose == p].iloc[0]),
+                       "uhf": cluster_uhf(cl, cfg.uhf) or 0}, f, indent=2)
     log(f"exported {len(top_ids)} pose(s) for DFT to {os.path.join(out, 'dft_export')}")
 
 

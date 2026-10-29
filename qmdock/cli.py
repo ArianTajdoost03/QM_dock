@@ -1,6 +1,7 @@
 import argparse
 import faulthandler
 
+from qmdock.chem.spin import parse_uhf
 from qmdock.config import Config
 
 
@@ -40,7 +41,6 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--ref-steps", type=int, default=400)
     p.add_argument("--strain-restraint", type=float, default=0.2)
     p.add_argument("--strain-steps", type=int, default=100)
-    p.add_argument("--uhf", type=int, default=0)
     p.add_argument("--keep-waters", action="store_true")
     p.add_argument("--no-add-hydrogens", dest="add_hydrogens", action="store_false")
     p.add_argument("--receptor-ph", type=float, default=7.4)
@@ -48,6 +48,10 @@ def build_parser(description, with_ligand=True):
     p.add_argument("--ph-min", type=float, default=6.4)
     p.add_argument("--ph-max", type=float, default=8.4)
     p.add_argument("--max-states", type=int, default=4)
+    p.add_argument("--uhf", type=parse_uhf, default="auto")
+    p.add_argument("--relax-select", choices=("balanced", "e_bind"), default="balanced")
+    p.add_argument("--pocket-mode", choices=("pose", "site"), default="pose")
+    p.add_argument("--site-max-atoms", type=int, default=0)
     p.add_argument("--accuracy", type=float, default=1.0)
     p.add_argument("--relax-accuracy", type=float, default=1.0)
     p.add_argument("--state-ph", type=float, default=7.4)
@@ -106,7 +110,8 @@ def config_from_args(a, ligand):
                  strain_restraint=a.strain_restraint, strain_steps=a.strain_steps,
                  uhf=a.uhf, require_metal=a.require_metal, keep_waters=a.keep_waters, add_hydrogens=a.add_hydrogens,
                  receptor_ph=a.receptor_ph, protonation=a.protonation, ph_min=a.ph_min,
-                 ph_max=a.ph_max, max_states=a.max_states, state_ph=a.state_ph, state_window=a.state_window, accuracy=a.accuracy, relax_accuracy=a.relax_accuracy,
+                 ph_max=a.ph_max, max_states=a.max_states, state_ph=a.state_ph, state_window=a.state_window, accuracy=a.accuracy, relax_select=a.relax_select, pocket_mode=a.pocket_mode,
+                 site_max_atoms=a.site_max_atoms, relax_accuracy=a.relax_accuracy,
                  pka_penalty=not a.no_pka_penalty, pka_overrides=a.pka, solvent=a.solvent,
                  solvation_model=a.solvation_model, selection=a.selection, cluster_radius=a.cluster_radius,
                  cluster_expand=a.cluster_expand, expand_members=a.expand_members,
