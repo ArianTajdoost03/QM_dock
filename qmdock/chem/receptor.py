@@ -6,6 +6,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from qmdock.chem.elements import ATOMIC_NUMBER, BOND_TOLERANCE, COVALENT_RADII, LINK_BOND, METAL_CHARGE, METALS
+from qmdock.chem.metals import build_site_table
 from qmdock.chem.pdb_io import read_pdb
 
 COORDINATION_CUTOFF = 2.8
@@ -57,6 +58,8 @@ class Receptor:
     residues: list
     residue_atoms: list
     metal_partners: dict = field(default_factory=dict)
+    formal: object = None
+    metals: dict = field(default_factory=dict)
 
     def hydrogen_fraction(self):
         return float((self.elements == "H").sum()) / max(1, int((self.elements != "H").sum()))
@@ -88,7 +91,8 @@ class Receptor:
         name = self.residues[r][3]
         by_name = {self.names[i]: i for i in idx}
         if len(idx) == 1 and self.elements[idx[0]] in METAL_CHARGE:
-            return METAL_CHARGE[self.elements[idx[0]]]
+            site = self.metals.get(int(idx[0]))
+            return site.oxidation if site is not None else METAL_CHARGE[self.elements[idx[0]]]
         q = 0
         hs = lambda *ns: [self.h_count(by_name[n]) for n in ns if n in by_name]
         if name in ("ASP", "ASH"):
@@ -214,7 +218,7 @@ class Receptor:
 
 
 def load_receptor(path, min_unit_atoms=10, require_metal=False, tolerance=BOND_TOLERANCE,
-                  remove_waters=True, polymer_atoms=400):
+                  remove_waters=True, polymer_atoms=400, metal_overrides=(), prior=None):
     atoms = read_pdb(path, remove_waters)
     unknown = sorted(set(atoms.elements) - set(ATOMIC_NUMBER))
     if unknown:
@@ -261,8 +265,10 @@ def load_receptor(path, min_unit_atoms=10, require_metal=False, tolerance=BOND_T
         for i in tree.query_ball_point(coords[m], COORDINATION_CUTOFF):
             if atoms.elements[i] in ("N", "O", "S") and residue_of_atom[i] != residue_of_atom[m]:
                 metal_partners.setdefault(int(residue_of_atom[i]), set()).add(int(residue_of_atom[m]))
-    return Receptor(atoms.elements, coords, atoms.names, tree, labels, unit_atoms, eligible, reasons,
-                    polymer, neighbors, residue_of_atom, residues, residue_atoms, metal_partners)
+    receptor = Receptor(atoms.elements, coords, atoms.names, tree, labels, unit_atoms, eligible, reasons,
+                        polymer, neighbors, residue_of_atom, residues, residue_atoms, metal_partners, atoms.formal)
+    receptor.metals = build_site_table(receptor, metal_overrides, prior)
+    return receptor
 
 
 def find_surface_sites(receptor, n, spacing, seed=7, probe=4.0):

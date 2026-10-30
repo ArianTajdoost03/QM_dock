@@ -65,7 +65,7 @@ def check_parity(numbers, charge, uhf):
         raise ValueError(f"{electrons} electrons is incompatible with uhf={uhf}")
 
 
-def solve(numbers, pos_ang, charge, uhf, gradient=False, accuracy=1.0, solv=None):
+def solve(numbers, pos_ang, charge, uhf, gradient=False, accuracy=1.0, solv=None, spinpol=0.0):
     numbers = np.asarray(numbers, dtype=np.int32)
     check_parity(numbers, charge, uhf)
     last = None
@@ -80,6 +80,8 @@ def solve(numbers, pos_ang, charge, uhf, gradient=False, accuracy=1.0, solv=None
                 calc.set(key, value)
             if solv:
                 calc.add(f"{solv[0]}-solvation", solv[1])
+            if int(uhf) and spinpol:
+                calc.add("spin-polarization", float(spinpol))
             res = calc.singlepoint()
             grad = np.array(res.get("gradient")) if gradient else None
             return float(res.get("energy")), grad, attempt
@@ -89,7 +91,8 @@ def solve(numbers, pos_ang, charge, uhf, gradient=False, accuracy=1.0, solv=None
 
 
 class Evaluator:
-    def __init__(self, numbers, charge, uhf, accuracy, solv):
+    def __init__(self, numbers, charge, uhf, accuracy, solv, spinpol=0.0):
+        self.spinpol = spinpol
         self.numbers = np.asarray(numbers, dtype=np.int32)
         self.charge = charge
         self.uhf = uhf
@@ -108,6 +111,8 @@ class Evaluator:
             calc.set(key, value)
         if self.solv:
             calc.add(f"{self.solv[0]}-solvation", self.solv[1])
+        if int(self.uhf) and self.spinpol:
+            calc.add("spin-polarization", float(self.spinpol))
         return calc
 
     def __call__(self, pos_ang):
@@ -121,10 +126,11 @@ class Evaluator:
         except RuntimeError:
             self.calc, self.res = None, None
             return solve(self.numbers, pos_ang, self.charge, self.uhf, gradient=True, accuracy=self.accuracy,
-                         solv=self.solv)
+                         solv=self.solv, spinpol=self.spinpol)
 
 
-def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0, solv=None, restraint=None, info=None):
+def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0, solv=None, restraint=None, info=None,
+          spinpol=0.0):
     pos = np.array(pos_ang, dtype=float)
     movable = np.asarray(movable)
     worst = [0]
@@ -138,7 +144,7 @@ def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0,
         anchor = pos[atoms].copy()
 
     check_parity(numbers, charge, uhf)
-    evaluate = Evaluator(numbers, charge, uhf, accuracy, solv)
+    evaluate = Evaluator(numbers, charge, uhf, accuracy, solv, spinpol)
 
     def fun(x):
         p = pos.copy()
@@ -161,7 +167,7 @@ def relax(numbers, pos_ang, movable, charge, uhf, max_steps, fmax, accuracy=1.0,
     out[movable] = res.x.reshape(-1, 3)
     energy = float(res.fun)
     if held is not None:
-        energy = solve(numbers, out, charge, uhf, accuracy=accuracy, solv=solv)[0]
+        energy = solve(numbers, out, charge, uhf, accuracy=accuracy, solv=solv, spinpol=spinpol)[0]
     if info is not None:
         info["e_start"] = first[0]
         info["trace"] = trace
@@ -176,13 +182,13 @@ def run_job(job):
     try:
         if job["kind"] == "energy":
             e, _, a = solve(job["numbers"], job["pos"], job["charge"], job["uhf"],
-                            accuracy=job["accuracy"], solv=solv)
+                            accuracy=job["accuracy"], solv=solv, spinpol=job.get("spinpol", 0.0))
             out = {"energy": e, "attempt": a}
         else:
             info = {}
             pos, e, steps, a = relax(job["numbers"], job["pos"], job["movable"], job["charge"],
                                      job["uhf"], job["steps"], job["fmax"], job["accuracy"], solv,
-                                     job.get("restraint"), info)
+                                     job.get("restraint"), info, job.get("spinpol", 0.0))
             out = {"energy": e, "pos": pos, "steps": steps, "attempt": a, "e_start": info["e_start"],
                    "converged": info["converged"], "gmax": info["gmax"]}
             if "lig_slice" in job:

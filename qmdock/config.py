@@ -66,6 +66,9 @@ class Config:
     pka_penalty: bool = True
     pka_overrides: list = field(default_factory=list)
     uhf: int | str = "auto"
+    metal_state: list = field(default_factory=list)
+    spin_scan: bool = True
+    spin_polarization: float = 1.0
     relax_select: str = "balanced"
     pocket_mode: str = "pose"
     site_max_atoms: int = 0

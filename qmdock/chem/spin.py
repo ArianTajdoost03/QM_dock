@@ -17,8 +17,13 @@ def uhf_for(elements, setting):
     return int(setting)
 
 
-def cluster_uhf(cluster, setting):
-    n = uhf_for(cluster.elements(), setting)
+def cluster_uhf(cluster, setting, receptor=None):
+    if setting == "auto" and getattr(receptor, "metals", None) is not None:
+        from qmdock.chem.metals import cluster_plan
+
+        n = cluster_plan(receptor, cluster).uhf
+    else:
+        n = uhf_for(cluster.elements(), setting)
     return n if (cluster.electrons() - n) % 2 == 0 else None
 
 

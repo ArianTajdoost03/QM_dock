@@ -6,6 +6,7 @@ from scipy.spatial import cKDTree
 
 from qmdock.chem.elements import METALS, WATER_NAMES
 from qmdock.chem.pdb_io import normalize_element
+from qmdock.chem.metals import parse_state_overrides
 from qmdock.chem.receptor import COORDINATION_CUTOFF, hydrogen_warning, load_receptor
 from qmdock.config import PROTONATED_RECEPTOR_FILE
 
@@ -203,7 +204,9 @@ def protonate_receptor(path, out_path, ph):
 
 
 def load_protonated(cfg, out_dir, log):
-    receptor = load_receptor(cfg.receptor, cfg.min_unit_atoms, cfg.require_metal, remove_waters=not cfg.keep_waters)
+    overrides = parse_state_overrides(getattr(cfg, "metal_state", ()))
+    receptor = load_receptor(cfg.receptor, cfg.min_unit_atoms, cfg.require_metal, remove_waters=not cfg.keep_waters,
+                             metal_overrides=overrides)
     if hydrogen_warning(receptor) and cfg.add_hydrogens:
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, PROTONATED_RECEPTOR_FILE)
@@ -217,7 +220,8 @@ def load_protonated(cfg, out_dir, log):
         log(f"added {added} hydrogens ({adjusted} changed at metal sites, "
             f"{'relaxed with ' + HYDROGEN_FORCEFIELD if relaxed else 'force field relaxation failed, bond lengths regularized'}), "
             f"protonated receptor saved to {path}")
-        receptor = load_receptor(path, cfg.min_unit_atoms, cfg.require_metal, remove_waters=not cfg.keep_waters)
+        receptor = load_receptor(path, cfg.min_unit_atoms, cfg.require_metal, remove_waters=not cfg.keep_waters,
+                                 metal_overrides=overrides, prior=receptor.metals)
     warning = hydrogen_warning(receptor)
     if warning:
         log(f"WARNING: {warning}")

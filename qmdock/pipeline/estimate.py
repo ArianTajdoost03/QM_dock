@@ -25,7 +25,7 @@ def report_dry_run(cfg, receptor, sel, lig, workers):
     smallest = min(pockets.values(), key=lambda c: c.n_atoms)
     t0 = time.time()
     res = run_job(energy_job(("cal", 0), numbers_of(smallest.elements()), smallest.coords(), smallest.charge, cfg,
-                                  cluster_uhf(smallest, cfg.uhf) or 0))
+                                  cluster_uhf(smallest, cfg.uhf, receptor) or 0))
     t_cal = res["seconds"] if res["ok"] else time.time() - t0
     n_cal = smallest.n_atoms
 

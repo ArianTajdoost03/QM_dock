@@ -23,12 +23,12 @@ def scan(receptor, cfg, numbers, charge, poses, shells, accuracies, runner):
                          f"ligand energies, accuracy {accuracy:g}")
         for shell in shells:
             clusters = {i: receptor.build_cluster(poses[i], shell, None, shell) for i in range(len(poses))}
-            usable = {i: c for i, c in clusters.items() if c is not None and cluster_uhf(c, conf.uhf) is not None}
+            usable = {i: c for i, c in clusters.items() if c is not None and cluster_uhf(c, conf.uhf, receptor) is not None}
             pockets = {c.key: c for c in usable.values()}
             jobs = [energy_job(("pocket", k), numbers_of(c.elements()), c.coords(), c.charge, conf,
-                               cluster_uhf(c, conf.uhf)) for k, c in pockets.items()]
+                               cluster_uhf(c, conf.uhf, receptor)) for k, c in pockets.items()]
             jobs += [energy_job(("complex", i), np.concatenate([numbers_of(c.elements()), numbers]),
-                                np.vstack([c.coords(), poses[i]]), c.charge + charge, conf, cluster_uhf(c, conf.uhf))
+                                np.vstack([c.coords(), poses[i]]), c.charge + charge, conf, cluster_uhf(c, conf.uhf, receptor))
                      for i, c in usable.items()]
             res = runner.map(jobs, f"shell {shell:g} A, accuracy {accuracy:g}")
             for i, c in usable.items():

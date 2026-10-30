@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -11,6 +11,17 @@ class Atoms:
     coords: np.ndarray
     names: list
     residues: list
+    formal: object = None
+
+
+def parse_formal(text):
+    text = text.strip()
+    if len(text) < 2:
+        return 0
+    digits = "".join(c for c in text if c.isdigit())
+    if not digits:
+        return 0
+    return int(digits) * (-1 if "-" in text else 1)
 
 
 def normalize_element(symbol, name=""):
@@ -22,7 +33,7 @@ def normalize_element(symbol, name=""):
 
 
 def read_pdb(path, remove_waters=True):
-    elements, coords, names, residues = [], [], [], []
+    elements, coords, names, residues, formal = [], [], [], [], []
     first_alt = {}
     with open(path) as f:
         for line in f:
@@ -42,7 +53,8 @@ def read_pdb(path, remove_waters=True):
             coords.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
             names.append(name)
             residues.append((chain, resseq, icode, resname))
-    return Atoms(np.array(elements), np.array(coords, dtype=float), names, residues)
+            formal.append(parse_formal(line[78:80]) if len(line) > 78 else 0)
+    return Atoms(np.array(elements), np.array(coords, dtype=float), names, residues, np.array(formal, dtype=int))
 
 
 def write_xyz(path, elements, coords, comment=""):

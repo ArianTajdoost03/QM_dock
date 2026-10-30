@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from qmdock.config import COST_EXPONENT, HARTREE_TO_KCAL
-from qmdock.chem.spin import cluster_uhf, uncertain_metals
+from qmdock.chem.metals import SCAN_MARGIN_KCAL, cluster_plan, lower, spin_name
+from qmdock.chem.spin import cluster_uhf
 from qmdock.qm.jobs import energy_job, numbers_of, relax_job, strain_job
 from qmdock.qm.pool import log
 from qmdock.search.clustering import spread_members
@@ -25,8 +26,8 @@ class QMResult:
     warnings: list = field(default_factory=list)
 
 
-def spin_of(cluster, cfg):
-    return cluster_uhf(cluster, cfg.uhf)
+def spin_of(cluster, cfg, receptor=None):
+    return cluster_uhf(cluster, cfg.uhf, receptor)
 
 
 def choose_relax_poses(ranked, stage1, count, mode):
@@ -60,7 +61,7 @@ def assign_pockets(receptor, cfg, pids, coord_of, cap, known, n_ligand):
         for g in groups:
             union = receptor.build_cluster(np.vstack([coord_of[q] for q in g["poses"] + [p]]),
                                            cfg.shell, cap, cfg.charged_shell)
-            if union is None or spin_of(union, cfg) is None:
+            if union is None or spin_of(union, cfg, receptor) is None:
                 continue
             shared = (len(g["poses"]) + 1) * (union.n_atoms + n_ligand) ** COST_EXPONENT + union.n_atoms ** COST_EXPONENT
             gain = g["separate"] + alone - shared
@@ -78,7 +79,7 @@ def assign_pockets(receptor, cfg, pids, coord_of, cap, known, n_ligand):
         wanted = pocket_members(shared)
         saving = shared.n_atoms ** COST_EXPONENT
         reusable = [(k * ((c.n_atoms + n_ligand) ** COST_EXPONENT - (shared.n_atoms + n_ligand) ** COST_EXPONENT), c)
-                    for c in known.values() if spin_of(c, cfg) is not None and wanted <= pocket_members(c)]
+                    for c in known.values() if spin_of(c, cfg, receptor) is not None and wanted <= pocket_members(c)]
         reusable = [(extra, c) for extra, c in reusable if extra < saving]
         if reusable:
             shared = min(reusable, key=lambda item: item[0])[1]
@@ -97,7 +98,75 @@ class Session:
         self.pocket_ids = {}
         self.site_cluster = None
         self.site_coords = None
+        self.spin_cache = {}
+        self.noted = set()
         self.lock = threading.Lock()
+        self.spin_lock = threading.Lock()
+
+    def spin(self, cl):
+        with self.lock:
+            hit = self.spin_cache.get(cl.key)
+        if hit is not None:
+            return hit["uhf"]
+        return spin_of(cl, self.cfg, self.receptor)
+
+    def spin_notes(self, cl):
+        if self.cfg.uhf != "auto":
+            return [], "high"
+        plan = cluster_plan(self.receptor, cl)
+        notes, confidence = list(plan.notes), plan.confidence
+        with self.lock:
+            info = self.spin_cache.get(cl.key)
+        if info is not None and info["gap"] is not None:
+            notes.append(f"spin check at uhf {info['rule']} vs {info['alternative']}: {info['gap']:+.1f} kcal/mol, "
+                         f"using uhf {info['uhf']}")
+            if info["uhf"] != info["rule"]:
+                confidence = lower(confidence, "low")
+        return notes, confidence
+
+    def resolve_spins(self, clusters):
+        cfg = self.cfg
+        if cfg.uhf != "auto" or not cfg.spin_scan:
+            return
+        with self.spin_lock:
+            todo = {}
+            for cl in clusters:
+                if cl is None or cl.key in todo:
+                    continue
+                with self.lock:
+                    if cl.key in self.spin_cache or self.pocket_energy.get(cl.key) is not None:
+                        continue
+                plan = cluster_plan(self.receptor, cl)
+                if plan.scan_site is None or len(plan.scan_options) < 2:
+                    continue
+                if (cl.electrons() - plan.scan_options[0]) % 2:
+                    continue
+                todo[cl.key] = (cl, plan)
+            if not todo:
+                return
+            jobs = [energy_job(("spin", key, u), numbers_of(cl.elements()), cl.coords(), cl.charge, cfg, u)
+                    for key, (cl, plan) in todo.items() for u in plan.scan_options]
+            res = self.runner.map(jobs, f"spin check ({len(todo)} pocket(s))")
+            for key, (cl, plan) in todo.items():
+                rule = plan.scan_options[0]
+                energies = {u: res[("spin", key, u)]["energy"] for u in plan.scan_options
+                            if res[("spin", key, u)]["ok"]}
+                choice, gap, alternative = rule, None, plan.scan_options[1]
+                if rule in energies and alternative in energies:
+                    gap = (energies[rule] - energies[alternative]) * HARTREE_TO_KCAL
+                    if gap > SCAN_MARGIN_KCAL:
+                        choice = alternative
+                elif energies and rule not in energies:
+                    choice = min(energies, key=energies.get)
+                if gap is not None:
+                    verdict = "keeping the chemistry-based assumption" if choice == rule else "switching spin state"
+                    log(f"  spin check for {plan.scan_site.label}: uhf {rule} vs {alternative}: "
+                        f"{gap:+.1f} kcal/mol (alternative minus assumed, margin {SCAN_MARGIN_KCAL:g}); {verdict}")
+                with self.lock:
+                    self.spin_cache[key] = {"uhf": choice, "gap": gap, "rule": rule, "alternative": alternative}
+                    if choice in energies:
+                        self.pocket_energy[key] = energies[choice]
+                        self.clusters[key] = cl
 
     def pocket_id(self, key):
         with self.lock:
@@ -119,7 +188,7 @@ class Session:
             return None
         every = np.vstack(stack)
         shared = self.receptor.build_cluster(every, cfg.shell, max_atoms, cfg.charged_shell)
-        if shared is None or spin_of(shared, cfg) is None:
+        if shared is None or self.spin(shared) is None:
             log("  site pocket not usable; scoring each pose with its own pocket")
             return None
         if cfg.site_max_atoms and shared.n_atoms > cfg.site_max_atoms:
@@ -144,29 +213,29 @@ class Session:
         infos = self.site_pockets(lig, pids, coord_of, max_atoms) if cfg.pocket_mode == "site" else None
         if infos is None:
             infos = assign_pockets(self.receptor, cfg, pids, coord_of, max_atoms, known, lig.n_atoms)
+        self.resolve_spins([infos[p] for p in pids])
         need = {}
         for p in pids:
             cl = infos[p]
-            if cl is not None and spin_of(cl, cfg) is not None and cl.key not in self.pocket_energy:
+            if cl is not None and self.spin(cl) is not None and cl.key not in self.pocket_energy:
                 need[cl.key] = cl
         shared_by = Counter(cl.key for cl in infos.values() if cl is not None)
-        jobs = [energy_job(("pocket", k), numbers_of(cl.elements()), cl.coords(), cl.charge, cfg, spin_of(cl, cfg))
+        jobs = [energy_job(("pocket", k), numbers_of(cl.elements()), cl.coords(), cl.charge, cfg, self.spin(cl))
                 for k, cl in need.items()]
         with self.lock:
             ready = {k for k, v in self.pocket_energy.items() if v is not None}
         n_pockets = len(jobs)
         for p in pids:
             cl = infos[p]
-            if cl is not None and spin_of(cl, cfg) is not None and (cl.key in need or cl.key in ready):
+            if cl is not None and self.spin(cl) is not None and (cl.key in need or cl.key in ready):
                 numbers = np.concatenate([numbers_of(cl.elements()), lig.numbers])
                 jobs.append(energy_job(("complex", p), numbers, np.vstack([cl.coords(), coord_of[p]]),
-                                       cl.charge + lig.charge, cfg, spin_of(cl, cfg)))
-        open_shell = sorted({(cl.key, spin_of(cl, cfg)) for cl in (infos[p] for p in pids)
-                             if cl is not None and (spin_of(cl, cfg) or 0) > 0})
-        if open_shell:
-            metals = sorted({m for cl in (infos[p] for p in pids) if cl is not None for m in uncertain_metals(cl)})
-            log(f"  open-shell metal site(s) treated as spin-polarized (uhf {sorted({u for _, u in open_shell})}); "
-                "the spin state is an assumption" + (f" for {', '.join(metals)}" if metals else ""))
+                                       cl.charge + lig.charge, cfg, self.spin(cl)))
+        for cl in {c.key: c for c in (infos[p] for p in pids) if c is not None}.values():
+            for note in self.spin_notes(cl)[0]:
+                if note not in self.noted:
+                    self.noted.add(note)
+                    log(f"  metal site: {note}")
         res = self.runner.map(jobs, f"pocket and complex energies ({n_pockets} new pockets, "
                                     f"{len(jobs) - n_pockets} complexes for {len(pids)} poses)")
         with self.lock:
@@ -184,7 +253,7 @@ class Session:
                    "truncated_units": cl.truncated if cl else 0,
                    "pocket_id": self.pocket_id(cl.key) if cl else None,
                    "pocket_poses": shared_by[cl.key] if cl else 0}
-            if cl is not None and spin_of(cl, cfg) is None:
+            if cl is not None and self.spin(cl) is None:
                 row["status"] = "odd_electron"
             elif r is None or not r["ok"]:
                 row["status"] = "no_pocket" if r is None else "scf_failed"
@@ -196,10 +265,11 @@ class Session:
                 row.update(status="ok", scf_attempt=r["attempt"], n_atoms=cl.n_atoms + lig.n_atoms,
                            n_residues=cl.n_residues, cluster_charge=cl.charge, e_int=e_int, strain=strain,
                            strain_raw=strain_raw, e_bind=e_int + strain, e_bind_raw=e_int + strain_raw,
-                           e_complex=r["energy"], uhf=spin_of(cl, cfg))
-                notes = uncertain_metals(cl) if (spin_of(cl, cfg) or 0) > 0 else []
+                           e_complex=r["energy"], uhf=self.spin(cl))
+                notes, confidence = self.spin_notes(cl)
                 if notes:
-                    row["spin_note"] = "assumed high-spin " + ",".join(notes)
+                    row["spin_note"] = "; ".join(notes)
+                    row["spin_confidence"] = confidence
             rows[p] = row
         return rows
 
@@ -230,7 +300,7 @@ class Session:
         if cap is None or cluster.n_atoms <= cap:
             return cluster
         small = self.receptor.build_cluster(ligand_coords, self.cfg.shell, cap, self.cfg.charged_shell)
-        return cluster if small is None or spin_of(small, self.cfg) is None else small
+        return cluster if small is None or self.spin(small) is None else small
 
     def valid(self, sel, lig, p):
         return p not in sel.rejected and (sel.flex or int(sel.poses.conf[p]) in lig.conf_e)
@@ -290,7 +360,7 @@ class Session:
             atoms[p] = cl.n_atoms
             jobs.append(relax_job(("relax", p), numbers, pos, np.arange(cl.n_atoms, len(numbers)),
                                   cl.charge + lig.charge, cfg, (cl.n_atoms, len(numbers)), lig.charge,
-                                  uhf=spin_of(cl, cfg) or 0))
+                                  uhf=self.spin(cl) or 0))
         for key, r in self.runner.map(jobs, "ligand relaxation").items():
             p = key[1]
             if not r["ok"]:

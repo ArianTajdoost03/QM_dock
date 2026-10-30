@@ -9,13 +9,13 @@ def numbers_of(elements):
 
 def energy_job(key, numbers, pos, charge, cfg, uhf=0):
     return {"kind": "energy", "key": key, "numbers": numbers, "pos": pos, "charge": charge,
-            "uhf": uhf, "accuracy": cfg.accuracy, "solvent": cfg.solvent, "model": cfg.solvation_model}
+            "uhf": uhf, "spinpol": cfg.spin_polarization if uhf else 0.0, "accuracy": cfg.accuracy, "solvent": cfg.solvent, "model": cfg.solvation_model}
 
 
 def relax_job(key, numbers, pos, movable, charge, cfg, lig_slice=None, lig_charge=0, steps=None, restraint=None,
               uhf=0):
     job = {"kind": "relax", "key": key, "numbers": numbers, "pos": pos, "movable": movable,
-           "charge": charge, "uhf": uhf, "steps": cfg.relax_steps if steps is None else steps,
+           "charge": charge, "uhf": uhf, "spinpol": cfg.spin_polarization if uhf else 0.0, "steps": cfg.relax_steps if steps is None else steps,
            "fmax": cfg.relax_fmax, "accuracy": cfg.relax_accuracy, "solvent": cfg.solvent, "model": cfg.solvation_model}
     if lig_slice:
         job["lig_slice"] = lig_slice
